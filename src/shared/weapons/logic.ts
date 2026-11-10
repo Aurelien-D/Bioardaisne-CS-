@@ -125,13 +125,17 @@ function spreadOf(s: PlayerState, w: WeaponDef): number {
   }
 
   if (w.spreadMove > 0) {
+    // Movement penalty: f = clamp((speed / maxSpeed - 0.34) / 0.66, 0, 1), i.e.
+    // nothing up to `accurate`, everything at `maxSpeed`, linear in between.
     // Same top speed as maxSpeedFor() in player/step.ts (not imported: it imports this file).
     let maxSpeed = MOVE.runSpeed * w.moveSpeed;
     if (zoomed && w.zoomMoveMul) maxSpeed *= w.zoomMoveMul;
-    if (maxSpeed > 0) {
-      const speed = Math.sqrt(s.vel.x * s.vel.x + s.vel.z * s.vel.z);
-      const f = (speed / maxSpeed - ACCURATE_SPEED_FRACTION) / (1 - ACCURATE_SPEED_FRACTION);
-      if (f > 0) spread += w.spreadMove * (f < 1 ? f : 1);
+    const accurate = maxSpeed * ACCURATE_SPEED_FRACTION;
+    const speedSq = s.vel.x * s.vel.x + s.vel.z * s.vel.z; // horizontal only
+    // Squared comparison first: a player standing still costs no square root.
+    if (speedSq > accurate * accurate && maxSpeed > accurate) {
+      const f = (Math.sqrt(speedSq) - accurate) / (maxSpeed - accurate);
+      spread += w.spreadMove * (f < 1 ? f : 1);
     }
   }
 
@@ -190,8 +194,9 @@ export function stepWeapons(s: PlayerState, cmd: UserCmd, ev: StepEvents): void 
   }
 
   // --- 2. Weapon switch --------------------------------------------------------
+  // Requested slot: a valid index (integer, in range), not the one in hands, not empty.
   const want = cmd.slot;
-  if (!acting && want !== s.active && want === (want | 0)) {
+  if (want >= 0 && want < s.slots.length && want === (want | 0) && want !== s.active && !acting) {
     const target = s.slots[want];
     if (target) {
       s.active = want;
@@ -305,8 +310,12 @@ function fillClip(slot: WeaponSlotState | null, w: WeaponDef): void {
  */
 function fireShot(s: PlayerState, cmd: UserCmd, w: WeaponDef, ev: StepEvents): void {
   // Bullets go where the camera looks: view angles plus the current view punch.
-  const yaw = s.yaw + s.punchYaw;
-  const pitch = s.pitch + s.punchPitch;
+  // Commands are validated upstream; the fallback is a last line of defence so
+  // that a non-finite angle can never turn into NaN rays in the hit detection.
+  const aimYaw = s.yaw + s.punchYaw;
+  const aimPitch = s.pitch + s.punchPitch;
+  const yaw = Number.isFinite(aimYaw) ? aimYaw : 0;
+  const pitch = Number.isFinite(aimPitch) ? aimPitch : 0;
   const sy = Math.sin(yaw);
   const cy = Math.cos(yaw);
   const sp = Math.sin(pitch);

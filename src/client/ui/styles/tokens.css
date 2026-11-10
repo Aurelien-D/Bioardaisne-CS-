@@ -1,0 +1,235 @@
+/*
+ * BioArd'Aisne Strike — design tokens shared by every DOM interface layer (menus, HUD).
+ *
+ * Usage: `import './styles/tokens.css'` once per entry module (Vite de-duplicates it),
+ * put the class `bas-ui` on the layer's root element, then build with the variables
+ * below. Everything is prefixed `--bas-` / `.bas-` to stay out of the way.
+ *
+ * SCALE — the root font size is fluid: 1rem = 16 px on a 1920 × 1080 screen, about
+ * 14 px at 1280 × 720 and 19 px at 2560 × 1440. Size everything in rem (or with the
+ * --bas-s* spacing steps) and the interface keeps the same proportions on every
+ * desktop screen. Use px only for hairlines.
+ *
+ * COLOUR — dark navy glass over the 3D scene, brand blue for the primary accent and
+ * the Équipe Labo, red for Les Auditeurs / danger, white type.
+ */
+
+:root {
+  font-size: clamp(14px, min(8px + 0.7407vh, 8px + 0.4167vw), 22px);
+
+  /* --- Brand (public BioArd'Aisne palette) --- */
+  --bas-blue: #3182ce;
+  --bas-blue-dark: #2b6cb0;
+  --bas-navy: #003f71;
+  --bas-red: #e7343f;
+  --bas-grey: #4a4a49;
+  --bas-light: #eaf6fe;
+  --bas-white: #ffffff;
+
+  /* --- Accents derived from the brand (tuned for dark backgrounds) --- */
+  --bas-blue-bright: #63b3f4; /* text / icons on dark */
+  --bas-blue-soft: rgba(49, 130, 206, 0.22); /* tinted fills */
+  --bas-blue-glow: rgba(74, 160, 240, 0.55);
+  --bas-red-bright: #ff6b74;
+  --bas-red-dark: #b3202b;
+  --bas-red-soft: rgba(231, 52, 63, 0.2);
+  --bas-red-glow: rgba(240, 70, 80, 0.5);
+  --bas-amber: #ffc24a; /* warnings, objectives */
+  --bas-amber-soft: rgba(255, 194, 74, 0.16);
+  --bas-green: #45d6a0; /* success, confirmations */
+  --bas-green-soft: rgba(69, 214, 160, 0.16);
+
+  /* --- Team colours (identity.TEAMS: 0 = Labo, 1 = Auditeurs, 2 = spectators) --- */
+  --bas-team-0: var(--bas-blue);
+  --bas-team-0-bright: var(--bas-blue-bright);
+  --bas-team-1: var(--bas-red);
+  --bas-team-1-bright: var(--bas-red-bright);
+  --bas-team-2: #999999;
+
+  /* --- Surfaces --- */
+  --bas-bg-0: #020a14; /* deepest: page background, scrims */
+  --bas-bg-1: #051426;
+  --bas-bg-2: #0a2240;
+  --bas-bg-3: #103058;
+  --bas-glass: rgba(6, 22, 42, 0.8); /* panels over the 3D scene */
+  --bas-glass-strong: rgba(4, 15, 30, 0.93);
+  --bas-glass-soft: rgba(14, 40, 72, 0.5);
+  --bas-fill: rgba(130, 185, 240, 0.07); /* subtle raised fill (cards, rows) */
+  --bas-fill-hover: rgba(130, 185, 240, 0.13);
+  --bas-scrim: rgba(2, 9, 18, 0.74); /* dimming layer over the game (pause) */
+  --bas-line: rgba(140, 190, 240, 0.16); /* hairlines, borders */
+  --bas-line-strong: rgba(150, 200, 250, 0.34);
+  --bas-blur: 14px; /* backdrop-filter radius of glass panels */
+
+  /* --- Text --- */
+  --bas-text: #f3f8ff;
+  --bas-text-dim: #b1c6dc;
+  --bas-text-mute: #7b94ae;
+  --bas-text-on-accent: #ffffff;
+
+  /* --- Typography (system fonts only, nothing is downloaded) --- */
+  --bas-font: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  /* Condensed bold display face for headings, buttons and numbers. */
+  --bas-font-display:
+    'Bahnschrift', 'DIN Alternate', 'Avenir Next Condensed', 'Roboto Condensed', 'Barlow Condensed', 'Inter',
+    'Segoe UI', system-ui, 'Arial Narrow', Arial, sans-serif;
+  --bas-font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, 'DejaVu Sans Mono', monospace;
+  --bas-display-stretch: 82%;
+  --bas-display-tracking: 0.045em;
+
+  --bas-fs-xs: 0.72rem;
+  --bas-fs-sm: 0.82rem;
+  --bas-fs-md: 0.94rem; /* body */
+  --bas-fs-lg: 1.1rem;
+  --bas-fs-xl: 1.4rem;
+  --bas-fs-2xl: 1.9rem;
+  --bas-fs-3xl: 2.7rem;
+  --bas-fs-4xl: 3.8rem;
+
+  /* --- Spacing steps --- */
+  --bas-s1: 0.25rem;
+  --bas-s2: 0.5rem;
+  --bas-s3: 0.75rem;
+  --bas-s4: 1rem;
+  --bas-s5: 1.5rem;
+  --bas-s6: 2rem;
+  --bas-s7: 3rem;
+
+  /* --- Shape --- */
+  --bas-radius-sm: 0.2rem;
+  --bas-radius: 0.35rem;
+  --bas-radius-lg: 0.6rem;
+  --bas-cut: 0.7rem; /* size of the chamfered ("cut") corner of buttons and panels */
+
+  /* --- Elevation --- */
+  --bas-shadow: 0 0.6rem 1.8rem rgba(0, 0, 0, 0.42);
+  --bas-shadow-lg: 0 1.4rem 4rem rgba(0, 0, 0, 0.55);
+  --bas-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7), 0 0 0.6rem rgba(0, 0, 0, 0.45); /* text straight over the 3D scene */
+
+  /* --- Motion (quick; all disabled under prefers-reduced-motion) --- */
+  --bas-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --bas-t-fast: 90ms;
+  --bas-t: 160ms;
+  --bas-t-slow: 280ms;
+
+  /* --- Focus ring --- */
+  --bas-focus: #a8d8ff;
+
+  /* --- Stacking order of the interface layers --- */
+  --bas-z-hud: 10;
+  --bas-z-menus: 20;
+  --bas-z-toast: 30;
+}
+
+/* Root of an interface layer: base typography and sane defaults for everything inside. */
+.bas-ui {
+  font-family: var(--bas-font);
+  font-size: var(--bas-fs-md);
+  line-height: 1.45;
+  color: var(--bas-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-variant-numeric: tabular-nums;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.bas-ui *,
+.bas-ui *::before,
+.bas-ui *::after {
+  box-sizing: border-box;
+}
+
+.bas-ui button,
+.bas-ui input,
+.bas-ui select,
+.bas-ui textarea {
+  font: inherit;
+  color: inherit;
+  margin: 0;
+}
+
+.bas-ui :focus {
+  outline: none;
+}
+
+.bas-ui :focus-visible {
+  outline: 2px solid var(--bas-focus);
+  outline-offset: 2px;
+}
+
+/* Condensed bold heading face: add to any element (titles, big numbers, button labels). */
+.bas-display {
+  font-family: var(--bas-font-display);
+  font-stretch: var(--bas-display-stretch);
+  font-weight: 700;
+  letter-spacing: var(--bas-display-tracking);
+  text-transform: uppercase;
+  line-height: 1.05;
+}
+
+/* Small upper-case caption above a block ("SALON PRIVÉ", "ASTUCE DU LABO"). */
+.bas-kicker {
+  font-family: var(--bas-font-display);
+  font-stretch: var(--bas-display-stretch);
+  font-size: var(--bas-fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--bas-blue-bright);
+}
+
+/* Dark glass panel over the 3D scene. */
+.bas-glass {
+  background: linear-gradient(180deg, rgba(12, 36, 66, 0.82), rgba(5, 18, 35, 0.9));
+  border: 1px solid var(--bas-line);
+  border-radius: var(--bas-radius);
+  box-shadow:
+    var(--bas-shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  -webkit-backdrop-filter: blur(var(--bas-blur)) saturate(1.15);
+  backdrop-filter: blur(var(--bas-blur)) saturate(1.15);
+}
+
+/* Key cap: <kbd class="bas-kbd">Maj gauche</kbd> (labels from ui/keys.ts). */
+.bas-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75em;
+  height: 1.75em;
+  padding: 0 0.5em;
+  font-family: var(--bas-font);
+  font-size: 0.86em;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--bas-text);
+  background: linear-gradient(180deg, rgba(150, 200, 250, 0.2), rgba(150, 200, 250, 0.08));
+  border: 1px solid var(--bas-line-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--bas-radius-sm);
+}
+
+/* Inline SVG icon sized with the text (see ui/menu/icons.ts). */
+.bas-icon {
+  width: 1.25em;
+  height: 1.25em;
+  flex: none;
+  display: inline-block;
+  vertical-align: -0.22em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bas-ui *,
+  .bas-ui *::before,
+  .bas-ui *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
