@@ -12,6 +12,8 @@
  *       orbit  perspective three-quarter view (drag to turn, wheel to zoom)
  *   ?markers=0                     hide the frame axes, the grid and the anchors
  *   ?labels=0                      keep the markers but hide their text labels
+ *   ?move=<part>:<dx>,<dy>,<dz>    move a named part (metres, weapon axes) to check that it is
+ *                                  separate, e.g. ?w=pistol&move=slide:0,0,0.03;magazine:0,-0.06,0
  *   ?src=<url>                     raw mode: any glTF / GLB as authored (no placement), fitted to
  *                                  the window, four views with the SOURCE axes — used to work out
  *                                  the placement of a new model
@@ -44,6 +46,8 @@ interface WeaponInfo {
   size: [number, number, number];
   /** Ids that have a loaded asset. */
   available: string[];
+  /** Names of the movable parts of the displayed weapon. */
+  parts: string[];
 }
 
 interface WeaponsApi {
@@ -307,6 +311,16 @@ function orbit(cam: THREE.PerspectiveCamera, target: THREE.Vector3, distance: nu
 function showWeapon(asset: WeaponAsset, available: string[]): void {
   const def = WEAPONS[weaponId];
   const model = asset.scene.clone();
+  // The named parts are the children of the wrapped glTF scene.
+  const parts = (model.children[0]?.children ?? []).map((o) => o.name).filter(Boolean);
+  for (const item of (params.get('move') ?? '').split(';').filter(Boolean)) {
+    const [name, offset] = item.split(':');
+    const part = name ? model.getObjectByName(name) : undefined;
+    const d = (offset ?? '').split(',').map(Number);
+    if (!part || d.length !== 3 || d.some((v) => !Number.isFinite(v))) throw new Error(`Paramètre move invalide : « ${item} » (pièces : ${parts.join(', ')})`);
+    part.position.set(d[0]!, d[1]!, d[2]!);
+  }
+  model.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model);
   const size = box.getSize(new THREE.Vector3());
   const s = stats(model);
@@ -375,12 +389,14 @@ function showWeapon(asset: WeaponAsset, available: string[]): void {
     max: box.max.toArray() as [number, number, number],
     size: size.toArray() as [number, number, number],
     available,
+    parts,
   };
   overlay.textContent = [
     `${weaponId} — ${def.name} (${def.category}) · vue ${view}`,
     `longueur ${fmt(size.z * 100, 1)} cm · hauteur ${fmt(size.y * 100, 1)} cm · épaisseur ${fmt(size.x * 100, 1)} cm`,
     `boîte  min ${vec(box.min.toArray())}  max ${vec(box.max.toArray())}`,
     `${s.triangles} triangles · ${s.meshes} maillages · ${s.materials} matériaux · ${s.textures} textures`,
+    `pièces : ${parts.join(', ')}`,
     `muzzle ${vec(asset.muzzle)} · sight ${vec(asset.sight)} · gripLeft ${vec(asset.gripLeft)}`,
     asset.credit,
   ].join('\n');
@@ -441,6 +457,7 @@ async function showRaw(url: string): Promise<void> {
     max: box.max.toArray() as [number, number, number],
     size: size.toArray() as [number, number, number],
     available: [],
+    parts: [],
   };
   overlay.textContent = [
     `brut : ${url}`,

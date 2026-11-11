@@ -5,11 +5,28 @@
  * whose geometry is embedded (base64) and whose textures are .jpg / .png files next to it
  * (only .json / .jpg / .png / .webp are served where the game is published).
  *
- * The loader delivers each model in the WEAPON FRAME, whatever the source file looks like:
+ * Each model is delivered in the WEAPON FRAME:
  *   - metres, real-world size;
  *   - barrel toward -Z, top toward +Y, right-hand side of the weapon toward +X;
- *   - origin at the top of the pistol grip (where the firing hand holds): the bore axis sits
- *     a few centimetres above the origin, the trigger just in front of it.
+ *   - origin at the pistol grip, where the firing hand holds: the junction of the trigger guard
+ *     and the front of the grip. The bore axis sits 4 to 6 cm above the origin (2 cm on the
+ *     sub-machine gun, whose barrel is in line with the hand), the trigger just in front of it.
+ *
+ * The geometry is already baked in that frame in the files (this is done once, offline, when a
+ * model is converted), so the loader only wraps the glTF scene in a group and, if a model ever
+ * needs it, applies the optional `adjust` placement of its manifest entry.
+ *
+ * Movable parts are separate objects with an identity transform, named as below; move them
+ * directly in metres along the weapon axes, e.g. scene.getObjectByName('slide')!.position.z = 0.03.
+ *   knife     body, blade
+ *   pistol    body, slide, magazine, trigger
+ *   deagle    body, slide, magazine, trigger, hammer
+ *   smg       body, magazine, trigger
+ *   rifle_ak  body, magazine
+ *   rifle_m4  body, magazine, bolt, trigger, optic
+ *   shotgun   body, pump (fore-end and action bars), bolt, trigger
+ *   sniper    body, bolt, trigger, scope
+ * A part with several materials is a THREE.Group of meshes, the others are a THREE.Mesh.
  *
  * Usage:
  *   await preloadWeaponAssets();              // once, never rejects
@@ -37,93 +54,67 @@ export interface WeaponAsset {
 type Vec3 = [number, number, number];
 
 interface AssetSpec {
-  /**
-   * Placement of the glTF scene inside the delivered group:
-   * weapon = position + Rotation(XYZ Euler, degrees) * (scale * source).
-   */
-  rotation: Vec3;
-  /** Metres per source unit. */
-  scale: number;
-  position: Vec3;
   muzzle: Vec3;
   sight: Vec3;
   gripLeft: Vec3;
   credit: string;
+  /**
+   * Optional correction of the placement baked in the file:
+   * weapon = position + Rotation(XYZ Euler, degrees) * (scale * model). Leave it out normally.
+   */
+  adjust?: { rotation?: Vec3; scale?: number; position?: Vec3 };
 }
 
 /**
- * Per-model placement and anchors (weapon frame, metres). Sources and licences are listed in
- * public/media/credits-weapons.md; the placements were measured on the review page.
+ * Anchors (weapon frame, metres) and credits. Sources and licences are listed in
+ * public/media/credits-weapons.md; the anchors were measured on the review page.
  */
 const SPECS: Partial<Record<WeaponId, AssetSpec>> = {
   knife: {
     // Scalpel, enlarged to 24 cm so that it reads in first person (a real one is about 16 cm).
-    rotation: [-180, 0, 90],
-    scale: 0.011084,
-    position: [0, 0, 0.09],
+    // "muzzle" is the tip of the blade; there is no sight line and no support hand.
     muzzle: [0, -0.002, -0.135],
     sight: [0, 0.03, 0],
     gripLeft: [0, 0, 0.09],
     credit: '« Surgical Knife » par GulzarMrRobotics (sketchfab.com/GulzarAhmed), CC BY 4.0 — maillage simplifié',
   },
   pistol: {
-    rotation: [0, 0, 0],
-    scale: 0.125102,
-    position: [0.0195, -0.012, -0.01],
     muzzle: [0, 0.0455, -0.1027],
     sight: [0, 0.06, 0.06],
     gripLeft: [0, -0.045, 0.02],
     credit: '« 9mm Pistol » par Urpo (sketchfab.com/Urpo), CC BY 4.0',
   },
   deagle: {
-    rotation: [-180, 0, -180],
-    scale: 0.00975592,
-    position: [0, -0.188, -0.063],
     muzzle: [0, 0.0475, -0.1687],
     sight: [0, 0.067, 0.076],
     gripLeft: [0, -0.05, 0.025],
     credit: '« Desert Eagle » par ELIZION (sketchfab.com/ELIZION), CC BY 4.0',
   },
   smg: {
-    rotation: [-180, 0, -180],
-    scale: 0.0215972,
-    position: [-0.0143, -0.086, -0.218],
     muzzle: [0, 0.0178, -0.3227],
     sight: [0, 0.103, 0.006],
     gripLeft: [0, -0.041, -0.231],
     credit: '« KRSV VECTOR » par h1ggs (sketchfab.com/h1ggs), CC BY 4.0',
   },
   rifle_ak: {
-    rotation: [0, 90, 0],
-    scale: 0.0992099,
-    position: [0.002, -0.034, -0.143],
     muzzle: [0, 0.0397, -0.579],
     sight: [0, 0.09, -0.178],
     gripLeft: [0, 0.021, -0.303],
     credit: '« AKMN » par Kihan_lee (sketchfab.com/dlrlgks1013), CC BY 4.0',
   },
   rifle_m4: {
-    rotation: [0, 0, 0],
-    scale: 0.113485,
-    position: [0, 0.058, -0.03],
     muzzle: [0, 0.0559, -0.4628],
     sight: [0, 0.125, 0.044],
     gripLeft: [0, 0.025, -0.26],
-    credit: '« AR-15 style rifle » par Mateusz Woliński (sketchfab.com/jeandiz), CC BY 4.0',
+    credit: '« AR-15 style rifle » par Mateusz Woliński (sketchfab.com/jeandiz), CC BY 4.0 — textures éclaircies',
   },
   shotgun: {
-    rotation: [0, 0, 0],
-    scale: 0.0995548,
-    position: [0, -0.013, -0.15],
     muzzle: [0, 0.048, -0.6436],
     sight: [0, 0.063, -0.05],
     gripLeft: [0, 0, -0.37],
     credit: '« Remington 870 Police Magnum 12 Gauge Shotgun » par 8sianDude (sketchfab.com/haoliu95), CC BY 4.0',
   },
   sniper: {
-    rotation: [0, 90, 0],
-    scale: 1,
-    position: [0, -0.005, -0.31],
     muzzle: [0, 0.0461, -0.9059],
     sight: [0, 0.0825, -0.045],
     gripLeft: [0, 0.005, -0.24],
@@ -141,24 +132,21 @@ function assetUrl(id: WeaponId): string {
 }
 
 function build(id: WeaponId, spec: AssetSpec, source: THREE.Object3D): WeaponAsset {
-  const inner = new THREE.Group();
-  inner.name = `${id}:model`;
-  inner.add(source);
-  inner.rotation.set(spec.rotation[0] * DEG, spec.rotation[1] * DEG, spec.rotation[2] * DEG, 'XYZ');
-  inner.scale.setScalar(spec.scale);
-  inner.position.set(spec.position[0], spec.position[1], spec.position[2]);
+  // The glTF scene (its children are the named parts) is wrapped in the delivered group.
+  source.name = `${id}:model`;
+  const adjust = spec.adjust;
+  if (adjust?.rotation) source.rotation.set(adjust.rotation[0] * DEG, adjust.rotation[1] * DEG, adjust.rotation[2] * DEG, 'XYZ');
+  if (adjust?.scale !== undefined) source.scale.setScalar(adjust.scale);
+  if (adjust?.position) source.position.set(adjust.position[0], adjust.position[1], adjust.position[2]);
 
   const scene = new THREE.Group();
   scene.name = `weapon:${id}`;
-  scene.add(inner);
+  scene.add(source);
   scene.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
     mesh.castShadow = true;
     mesh.receiveShadow = false;
-    // The models are small and always near the camera: culling them per mesh buys nothing and
-    // their bounding spheres do not follow the view-model animation of sub-parts.
-    mesh.frustumCulled = false;
   });
   scene.updateMatrixWorld(true);
   return {

@@ -321,52 +321,62 @@ export function build(): MapData {
   // =====================================================================================
   // Extérieur : cour arrière, passage, rue
   // =====================================================================================
-  // Fourgon de la navette (cour)
+  // Les objets de l'extérieur sont de vrais modèles 3D (maps/models.ts) posés avec b.model() ;
+  // les collisions restent des boîtes invisibles, aux emplacements des anciens volumes.
+  // Fourgon de la navette (cour) : fourgon blanc de 5 m, l'avant vers +X
   b.at(24, 0, 3.4, 1, (m) => {
-    m.box(-1, 0.45, -2.6, 1, 2.3, 1.2, 'metal_white');
-    m.box(-0.95, 0.45, 1.2, 0.95, 1.5, 2.5, 'metal_white');
-    m.box(-0.9, 1.5, 1.2, 0.9, 2.1, 1.9, 'glass', { solid: false, detail: true });
-    m.box(-1.02, 1.0, -2.2, -1.0, 1.9, 0.8, 'metal_red', { solid: false, detail: true });
-    for (const [wx, wz] of [[-0.95, -1.7], [0.95, -1.7], [-0.95, 1.7], [0.95, 1.7]] as const) m.prim('cyl', wx, 0.36, wz, 0.72, 0.25, 0.72, 'rubber_black', { rot: { x: 0, y: 0, z: Math.PI / 2 } });
-    m.collider(-1, 0, -2.6, 1, 0.45, 2.5, 'metal');
+    m.model('van', 0, 0, -0.05);
+    m.collider(-1.02, 0, -2.55, 1.02, 2.25, 1.3, 'metal'); // caisse et cabine
+    m.collider(-0.97, 0, 1.3, 0.97, 1.4, 2.45, 'metal'); // capot
   });
   b.sign({ x: 22.8, y: 1.5, z: 4.42, facing: 0, w: 2.2, h: 0.7, text: 'bio ard’aisne', sub: 'Navette échantillons', style: 'plaque', icon: 'logo', bg: 0xffffff, color: 0x4a4a49 });
   // Bennes et palettes
-  b.box(38, 0, 1, 41, 1.4, 2.6, 'metal_green');
-  b.box(34, 0, 1, 36.5, 1.4, 2.6, 'metal_blue');
+  b.model('dumpster_b', 39.5, 0, 1.8);
+  b.collider(38.17, 0, 1.12, 40.83, 1.3, 2.48, 'metal');
+  b.model('dumpster_a', 35.25, 0, 1.8);
+  b.collider(33.9, 0, 1.1, 36.6, 1.3, 2.5, 'metal');
   P('pallet_loaded', 6, 2.5, 0);
   P('pallet_loaded', 14, 5.8, 1);
   P('carton_stack', 30, 6.9, 0);
   b.box(42.2, 0, 4.5, 44.6, 2.2, 7.6, 'brick_brown'); // local poubelles
-  // Passage ouest : bacs et clôture basse
-  b.box(0.3, 0, 14, 1.3, 1.1, 16.5, 'plastic_grey');
-  b.box(1.7, 0, 24, 2.7, 1.1, 26, 'plastic_green');
+  // Passage ouest : bacs roulants (trois gris contre le mur mitoyen, deux verts contre le pignon)
+  for (const bz of [14.45, 15.25, 16.05]) b.model('wheelie_bin_grey', 0.68, 0, bz, 90);
+  b.collider(0.34, 0, 14.1, 1.03, 1.08, 16.4, 'plastic');
+  for (const bz of [24.55, 25.4]) b.model('wheelie_bin_green', 2.4, 0, bz, -90);
+  b.collider(2.05, 0, 24.2, 2.75, 1.08, 25.75, 'plastic');
   P('gas_cylinder', 2.6, 10, 0);
-  // Rue : arbres d'alignement, abribus, voitures
-  for (const tx of [5, 14, 23, 32, 41]) {
-    b.prim('cyl', tx, 1.6, 35.3, 0.4, 3.2, 0.4, 'bark', { collide: true });
-    b.prim('sphere', tx, 4.6, 35.3, 3.6, 3.2, 3.6, 'foliage');
+  // Rue : érables d'alignement (tronc sous l'origine du modèle), lampadaires, abribus, voitures
+  [5, 14, 23, 32, 41].forEach((tx, i) => {
+    b.model('street_tree', tx, 0.1, 35.3, i * 73, 1 - (i % 3) * 0.04);
+    b.collider(tx - 0.14, 0, 35.16, tx + 0.14, 3.2, 35.44, 'wood');
     b.box(tx - 0.7, 0, 34.6, tx + 0.7, 0.12, 36, 'dirt', { solid: false, detail: true });
+  });
+  for (const lx of [9.5, 18.5, 36.5]) {
+    b.model('street_lamp', lx, 0, 35.72); // crosse vers la chaussée (+Z)
+    b.collider(lx - 0.1, 0, 35.62, lx + 0.1, 6.9, 35.82, 'metal');
   }
-  const car = (x: number, z: number, mat: MaterialId): void => {
+  /** Parked car, nose toward +X: `cabin` = [rear, front] of the glasshouse along the car, `half` = half body width. */
+  const car = (asset: string, x: number, z: number, half: number, length: number, cabin: [number, number]): void => {
     b.at(x, 0, z, 1, (m) => {
-      m.box(-0.85, 0.35, -2.1, 0.85, 0.95, 2.1, mat);
-      m.box(-0.78, 0.95, -1.1, 0.78, 1.5, 1.2, 'glass', { solid: false, detail: true });
-      m.box(-0.8, 1.5, -1.05, 0.8, 1.56, 1.15, mat, { solid: false, detail: true });
-      for (const [wx, wz] of [[-0.82, -1.35], [0.82, -1.35], [-0.82, 1.35], [0.82, 1.35]] as const) m.prim('cyl', wx, 0.33, wz, 0.66, 0.22, 0.66, 'rubber_black', { rot: { x: 0, y: 0, z: Math.PI / 2 } });
-      m.collider(-0.85, 0, -2.1, 0.85, 0.35, 2.1, 'metal');
-      m.collider(-0.78, 0.95, -1.1, 0.78, 1.5, 1.2, 'glass');
+      m.model(asset, 0, 0, 0);
+      m.collider(-half, 0, -length / 2, half, 0.9, length / 2, 'metal');
+      m.collider(-half + 0.1, 0.9, cabin[0], half - 0.1, 1.32, cabin[1], 'glass');
     });
   };
-  car(9.5, 38.4, 'metal_blue');
-  car(18.5, 38.6, 'metal_grey');
-  car(37, 38.4, 'metal_red');
-  // Abribus
-  b.box(26.5, 0, 34.2, 26.6, 2.4, 34.3, 'metal_dark');
-  b.box(30.4, 0, 34.2, 30.5, 2.4, 34.3, 'metal_dark');
-  b.box(26.4, 2.4, 33.9, 30.6, 2.5, 35.3, 'metal_dark');
-  b.box(26.5, 0.3, 34.2, 30.5, 2.2, 34.25, 'glass');
-  b.box(27, 0.45, 34.4, 30, 0.5, 34.8, 'wood_planks');
+  car('car_wagon', 9.5, 38.4, 0.87, 4.38, [-2.1, 1.0]);
+  car('car_sedan', 18.5, 38.6, 0.87, 4.36, [-1.4, 1.0]);
+  car('car_hatchback', 37, 38.4, 0.84, 3.96, [-1.8, 1.0]);
+  // Abribus vitré (ouvert vers la chaussée), corbeille, armoire électrique
+  b.model('bus_shelter', 28.5, 0, 35.06);
+  b.collider(26.46, 0.2, 34.22, 30.54, 2.4, 34.28, 'glass'); // fond vitré
+  b.collider(26.42, 2.38, 34.24, 30.58, 2.5, 35.88, 'metal'); // toit
+  b.collider(26.44, 0.5, 34.42, 26.6, 2.02, 35.72, 'glass'); // panneau d'affichage
+  b.collider(30.47, 0.2, 34.36, 30.53, 2.15, 35.24, 'glass'); // joue vitrée
+  b.collider(26.9, 0.4, 34.3, 30.1, 0.54, 34.74, 'metal'); // banc
+  b.model('street_bin', 31.15, 0, 34.6);
+  b.collider(30.9, 0, 34.35, 31.4, 0.95, 34.85, 'metal');
+  b.model('utility_box', 43.5, 0, 33.23);
+  b.collider(43.24, 0, 33, 43.76, 1.12, 33.45, 'metal');
 
   // =====================================================================================
   // Signalétique
