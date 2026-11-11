@@ -2,6 +2,7 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
+    <base href="/" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BioArd'Aisne Strike — revue des armes</title>
     <style>
@@ -59,13 +60,17 @@
       }
       #labels span {
         position: absolute;
-        transform: translate(7px, -50%);
+        /* Above and to the right of the point, so that the label never hides what it names. */
+        transform: translate(9px, -150%);
         padding: 0 4px;
         font-size: 11px;
         line-height: 15px;
         border-radius: 2px;
         background: rgba(0, 0, 0, 0.62);
         white-space: nowrap;
+      }
+      #labels span.left {
+        transform: translate(calc(-100% - 9px), -150%);
       }
       #labels span.tag {
         transform: none;

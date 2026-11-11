@@ -11,12 +11,14 @@
  *              weapon at (0.15, -0.165, -0.34) scaled 0.8 — the pose used by the game
  *       orbit  perspective three-quarter view (drag to turn, wheel to zoom)
  *   ?markers=0                     hide the frame axes, the grid and the anchors
+ *   ?labels=0                      keep the markers but hide their text labels
  *   ?src=<url>                     raw mode: any glTF / GLB as authored (no placement), fitted to
  *                                  the window, four views with the SOURCE axes — used to work out
  *                                  the placement of a new model
  *   ?src=<url>&pane=x|y|z|p        raw mode, one of the four views only (from +X, +Y, +Z, perspective)
  *
- * Markers: X red, Y green, Z blue (20 cm each, from the origin), 10 cm grid (50 cm lines brighter),
+ * Markers: X red, Y green, Z blue (from the origin, positive side; 20 cm each, 10 cm for hand guns
+ * and the knife), 10 cm grid (50 cm lines brighter),
  * spheres at the origin (white), muzzle (red), sight (green) and gripLeft (blue).
  *
  * Automation: window.__w = { ready, error, info }.
@@ -71,6 +73,7 @@ const rawSrc = params.get('src');
 const weaponId: WeaponId = IDS.includes(params.get('w') as WeaponId) ? (params.get('w') as WeaponId) : 'rifle_ak';
 const view: View = VIEWS.includes(params.get('view') as View) ? (params.get('view') as View) : 'side';
 const showMarkers = params.get('markers') !== '0';
+const showLabels = params.get('labels') !== '0';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const overlay = document.getElementById('overlay') as HTMLDivElement;
@@ -255,7 +258,8 @@ function stats(root: THREE.Object3D): { triangles: number; meshes: number; mater
 
 function buildNav(available: string[]): void {
   const link = (text: string, w: string, v: string, on: boolean, missing = false): string =>
-    `<a class="${on ? 'on' : ''}" style="${missing ? 'opacity:.45' : ''}" href="?w=${w}&view=${v}">${text}</a>`;
+    // Absolute path: the page sets <base href="/"> so that media/ URLs resolve from the site root.
+    `<a class="${on ? 'on' : ''}" style="${missing ? 'opacity:.45' : ''}" href="${location.pathname}?w=${w}&view=${v}">${text}</a>`;
   nav.innerHTML =
     IDS.map((id) => link(id, id, view, id === weaponId && !rawSrc, !available.includes(id))).join('') +
     '<br>' +
@@ -343,20 +347,23 @@ function showWeapon(asset: WeaponAsset, available: string[]): void {
     for (const a of anchors) frame.expandByPoint(new THREE.Vector3(...a.at));
     const from = view === 'side' ? new THREE.Vector3(1, 0, 0) : view === 'top' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, -1);
     const up = view === 'top' ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(0, 1, 0);
-    const pane = orthoPane(frame, from, up, [0, 0, 1, 1], 0.06);
+    const span = frame.getSize(new THREE.Vector3()).length();
+    const pane = orthoPane(frame, from, up, [0, 0, 1, 1], Math.max(0.02, span * 0.07));
     panes.push(pane);
     if (showMarkers) {
-      const reach = Math.ceil((frame.getSize(new THREE.Vector3()).length() + 0.4) * 10) / 10;
+      const reach = Math.ceil((span + 0.4) * 10) / 10;
       markerHolder.add(grid(view === 'side' ? 'x' : view === 'top' ? 'y' : 'z', reach, 0.1, 0.5));
       const thin = Math.max(size.length() * 0.0016, 0.0006);
-      markerHolder.add(axes(0.2, thin));
+      // Axes: 20 cm for long guns, 10 cm for hand guns and the knife.
+      const arm = size.length() > 0.45 ? 0.2 : 0.1;
+      markerHolder.add(axes(arm, thin));
       for (const a of anchors) {
         markerHolder.add(ball(a.at, thin * 3.2, a.color));
         pane.tags.push({ text: `${a.name} ${vec(a.at)}`, at: new THREE.Vector3(...a.at), color: a.css });
       }
-      pane.tags.push({ text: '+X', at: new THREE.Vector3(0.2, 0, 0), color: '#ff8080' });
-      pane.tags.push({ text: '+Y', at: new THREE.Vector3(0, 0.2, 0), color: '#80ff90' });
-      pane.tags.push({ text: '+Z', at: new THREE.Vector3(0, 0, 0.2), color: '#9fc0ff' });
+      pane.tags.push({ text: `+X ${arm * 100} cm`, at: new THREE.Vector3(arm, 0, 0), color: '#ff8080' });
+      pane.tags.push({ text: `+Y ${arm * 100} cm`, at: new THREE.Vector3(0, arm, 0), color: '#80ff90' });
+      pane.tags.push({ text: `+Z ${arm * 100} cm`, at: new THREE.Vector3(0, 0, arm), color: '#9fc0ff' });
     }
   }
 
@@ -489,10 +496,16 @@ function render(): void {
     renderer.render(markerScene, pane.camera);
     const top = h - py - ph;
     if (pane.title) tag(pane.title, px + 8, top + (panes.length > 1 && ry >= 0.5 && rx === 0 ? 96 : 8), '#eaf6fe', 'tag');
+    const seen: [number, number][] = [];
     for (const t of pane.tags) {
       v.copy(t.at).project(pane.camera);
       if (v.z < -1 || v.z > 1) continue;
-      tag(t.text, px + ((v.x + 1) / 2) * pw, top + ((1 - v.y) / 2) * ph, t.color);
+      const x = px + ((v.x + 1) / 2) * pw;
+      let y = top + ((1 - v.y) / 2) * ph;
+      // Labels of points that project onto the same pixel (an axis seen end-on) are stacked.
+      while (seen.some(([sx, sy]) => Math.abs(sx - x) < 60 && Math.abs(sy - y) < 15)) y += 16;
+      seen.push([x, y]);
+      if (showLabels) tag(t.text, x, y, t.color, x > px + pw * 0.8 ? 'left' : '');
     }
   }
   for (let i = used; i < tagEls.length; i++) tagEls[i]!.style.display = 'none';

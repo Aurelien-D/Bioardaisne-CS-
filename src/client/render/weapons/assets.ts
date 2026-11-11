@@ -51,8 +51,85 @@ interface AssetSpec {
   credit: string;
 }
 
-/** Per-model placement and anchors (weapon frame, metres). Generated with the review page. */
-const SPECS: Partial<Record<WeaponId, AssetSpec>> = {};
+/**
+ * Per-model placement and anchors (weapon frame, metres). Sources and licences are listed in
+ * public/media/credits-weapons.md; the placements were measured on the review page.
+ */
+const SPECS: Partial<Record<WeaponId, AssetSpec>> = {
+  knife: {
+    // Scalpel, enlarged to 24 cm so that it reads in first person (a real one is about 16 cm).
+    rotation: [-180, 0, 90],
+    scale: 0.011084,
+    position: [0, 0, 0.09],
+    muzzle: [0, -0.002, -0.135],
+    sight: [0, 0.03, 0],
+    gripLeft: [0, 0, 0.09],
+    credit: '« Surgical Knife » par GulzarMrRobotics (sketchfab.com/GulzarAhmed), CC BY 4.0 — maillage simplifié',
+  },
+  pistol: {
+    rotation: [0, 0, 0],
+    scale: 0.125102,
+    position: [0.0195, -0.012, -0.01],
+    muzzle: [0, 0.0455, -0.1027],
+    sight: [0, 0.06, 0.06],
+    gripLeft: [0, -0.045, 0.02],
+    credit: '« 9mm Pistol » par Urpo (sketchfab.com/Urpo), CC BY 4.0',
+  },
+  deagle: {
+    rotation: [-180, 0, -180],
+    scale: 0.00975592,
+    position: [0, -0.188, -0.063],
+    muzzle: [0, 0.0475, -0.1687],
+    sight: [0, 0.067, 0.076],
+    gripLeft: [0, -0.05, 0.025],
+    credit: '« Desert Eagle » par ELIZION (sketchfab.com/ELIZION), CC BY 4.0',
+  },
+  smg: {
+    rotation: [-180, 0, -180],
+    scale: 0.0215972,
+    position: [-0.0143, -0.086, -0.218],
+    muzzle: [0, 0.0178, -0.3227],
+    sight: [0, 0.103, 0.006],
+    gripLeft: [0, -0.041, -0.231],
+    credit: '« KRSV VECTOR » par h1ggs (sketchfab.com/h1ggs), CC BY 4.0',
+  },
+  rifle_ak: {
+    rotation: [0, 90, 0],
+    scale: 0.0992099,
+    position: [0.002, -0.034, -0.143],
+    muzzle: [0, 0.0397, -0.579],
+    sight: [0, 0.09, -0.178],
+    gripLeft: [0, 0.021, -0.303],
+    credit: '« AKMN » par Kihan_lee (sketchfab.com/dlrlgks1013), CC BY 4.0',
+  },
+  rifle_m4: {
+    rotation: [0, 0, 0],
+    scale: 0.113485,
+    position: [0, 0.058, -0.03],
+    muzzle: [0, 0.0559, -0.4628],
+    sight: [0, 0.125, 0.044],
+    gripLeft: [0, 0.025, -0.26],
+    credit: '« AR-15 style rifle » par Mateusz Woliński (sketchfab.com/jeandiz), CC BY 4.0',
+  },
+  shotgun: {
+    rotation: [0, 0, 0],
+    scale: 0.0995548,
+    position: [0, -0.013, -0.15],
+    muzzle: [0, 0.048, -0.6436],
+    sight: [0, 0.063, -0.05],
+    gripLeft: [0, 0, -0.37],
+    credit: '« Remington 870 Police Magnum 12 Gauge Shotgun » par 8sianDude (sketchfab.com/haoliu95), CC BY 4.0',
+  },
+  sniper: {
+    rotation: [0, 90, 0],
+    scale: 1,
+    position: [0, -0.005, -0.31],
+    muzzle: [0, 0.0461, -0.9059],
+    sight: [0, 0.0825, -0.045],
+    gripLeft: [0, 0.005, -0.24],
+    credit: '« Bolt Action Rifle 7.62 » par Mateusz Sadek (polyhaven.com), CC0',
+  },
+};
 
 const DEG = Math.PI / 180;
 const assets = new Map<WeaponId, WeaponAsset>();
