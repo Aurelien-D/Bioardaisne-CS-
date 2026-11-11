@@ -113,6 +113,21 @@ WebSockets (c'est le cas des trois cités).
 
 Contrôle de bon fonctionnement : `GET /healthz` répond `ok`, `GET /api/status` donne le nombre de salons et de joueurs.
 
+### Sur GitHub Pages (version solo uniquement)
+
+GitHub Pages ne sait servir que des fichiers : il n'y a pas de serveur de jeu derrière, donc pas de multijoueur.
+Le dépôt contient un déploiement automatique (`.github/workflows/pages.yml`) qui compile le jeu et publie la
+version solo à chaque mise à jour de `main`.
+
+Réglage à faire une seule fois dans le dépôt : **Settings → Pages → Build and deployment → Source : « GitHub Actions »**.
+(Avec la source « Deploy from a branch », Pages sert le code source non compilé et la page reste blanche.)
+
+Le jeu est ensuite disponible sur `https://<compte>.github.io/<dépôt>/`. Pour produire la même version à la main :
+
+```bash
+BAS_BASE=./ BAS_STATIC=1 npm run build:client   # dist/client, à déposer tel quel sur n'importe quel hébergeur de fichiers
+```
+
 ### Dimensionnement
 
 Le serveur est léger : un match de 12 joueurs consomme moins de 1 % d'un cœur de processeur. Les salons vides

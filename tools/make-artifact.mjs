@@ -17,18 +17,20 @@ if (!jsPath || !cssPath) throw new Error('dist/client/index.html : bundle introu
 let js = readFileSync(join(dist, jsPath), 'utf8');
 let css = readFileSync(join(dist, cssPath), 'utf8');
 
-// Inline the brand images referenced by absolute URL.
+// Inline the brand images (referenced as "brand/…" in the scripts, "/brand/…" in the styles).
 const dataUri = (file, mime) => `data:${mime};base64,${readFileSync(join(dist, file)).toString('base64')}`;
-for (const [url, mime] of [
-  ['/brand/logo-horizontal-dark.png', 'image/png'],
-  ['/brand/logo-horizontal.png', 'image/png'],
-  ['/brand/logo-vertical-dark.png', 'image/png'],
-  ['/brand/logo-vertical.png', 'image/png'],
-  ['/brand/monogram-red.png', 'image/png'],
-  ['/brand/monogram.svg', 'image/svg+xml'],
+for (const [file, mime] of [
+  ['brand/logo-horizontal-dark.png', 'image/png'],
+  ['brand/logo-horizontal.png', 'image/png'],
+  ['brand/logo-vertical-dark.png', 'image/png'],
+  ['brand/logo-vertical.png', 'image/png'],
+  ['brand/monogram-red.png', 'image/png'],
+  ['brand/monogram.svg', 'image/svg+xml'],
 ]) {
-  if (js.includes(url)) js = js.split(url).join(dataUri(url.slice(1), mime));
-  if (css.includes(url)) css = css.split(url).join(dataUri(url.slice(1), mime));
+  const uri = dataUri(file, mime);
+  const rx = new RegExp(`(?:\\.?/)?${file.replace(/[.]/g, '\\.')}`, 'g');
+  js = js.replace(rx, () => uri);
+  css = css.replace(rx, () => uri);
 }
 js = js.replace(/<\/script/gi, '<\\/script');
 css = css.replace(/<\/style/gi, '<\\/style');
