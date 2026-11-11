@@ -10,7 +10,9 @@ import type { TeamId } from '../../../shared/constants';
 import type { Vec3 } from '../../../shared/math/vec3';
 import type { WeaponId } from '../../../shared/weapons/defs';
 import type { AvatarFrame, IAvatar } from '../../core/contracts';
+import { WEAPONS } from '../../../shared/weapons/defs';
 import { createWeaponModel, type WeaponModel } from '../weapons/models';
+import { setWorldQuaternion, solveTwoBone } from './ik';
 
 interface Template {
   scene: THREE.Object3D;
@@ -57,8 +59,9 @@ export function preloadSoldier(): Promise<void> {
 export const soldierReady = (): boolean => template !== null;
 
 const TEAM_TINT: Record<number, [number, number, number]> = {
-  0: [0.42, 0.68, 1.5], // Équipe Labo: blue
-  1: [1.5, 0.45, 0.4], // Auditeurs: red
+  // Kept well below 1: bright armour under the sun would otherwise wash out to white.
+  0: [0.05, 0.17, 0.55], // Équipe Labo: blue
+  1: [0.55, 0.09, 0.07], // Auditeurs: red
 };
 
 export class SoldierAvatar implements IAvatar {
@@ -71,6 +74,15 @@ export class SoldierAvatar implements IAvatar {
   private spine: THREE.Object3D | null;
   private hand: THREE.Object3D | null;
   private head: THREE.Object3D | null;
+  private hips: THREE.Object3D | null;
+  private bones: Record<string, THREE.Object3D | null> = {};
+  private t1 = new THREE.Vector3();
+  private t2 = new THREE.Vector3();
+  private pole = new THREE.Vector3();
+  private footL = new THREE.Vector3();
+  private footR = new THREE.Vector3();
+  private footQL = new THREE.Quaternion();
+  private footQR = new THREE.Quaternion();
   private mats: THREE.MeshStandardMaterial[] = [];
   private base: THREE.Color[] = [];
   private glow: THREE.Color[] = [];
@@ -103,7 +115,7 @@ export class SoldierAvatar implements IAvatar {
       m.envMapIntensity = 0.6;
       // Team colour that stays readable in any lighting: a faint self-lit tint following the texture.
       m.emissiveMap = m.map;
-      m.emissive.setRGB(tint[0] > 1 ? 0.32 : 0.02, 0.05, tint[2] > 1 ? 0.38 : 0.02);
+      m.emissive.setRGB(tint[0] > 0.5 ? 0.1 : 0.0, 0.01, tint[2] > 0.5 ? 0.12 : 0.0);
       this.glow.push(m.emissive.clone());
       mesh.material = m;
       this.mats.push(m);
@@ -127,6 +139,10 @@ export class SoldierAvatar implements IAvatar {
     this.spine = model.getObjectByName('mixamorigSpine1') ?? null;
     this.hand = model.getObjectByName('mixamorigRightHand') ?? null;
     this.head = model.getObjectByName('mixamorigHead') ?? null;
+    this.hips = model.getObjectByName('mixamorigHips') ?? null;
+    for (const n of ['RightArm', 'RightForeArm', 'RightHand', 'LeftArm', 'LeftForeArm', 'LeftHand', 'RightUpLeg', 'RightLeg', 'RightFoot', 'LeftUpLeg', 'LeftLeg', 'LeftFoot']) {
+      this.bones[n] = model.getObjectByName(`mixamorig${n}`) ?? null;
+    }
   }
 
   private setWeapon(id: WeaponId): void {
@@ -173,20 +189,63 @@ export class SoldierAvatar implements IAvatar {
     this.walk.timeScale = Math.max(0.5, sp / 1.7);
     this.run.timeScale = Math.max(0.7, sp / 5.2);
     this.mixer.update(dt);
-    // Crouch: the whole body is compressed (no dedicated animation in the model).
-    const t = template!;
-    this.pivot.scale.set(t.scale, t.scale * (1 - f.crouch * 0.28), t.scale);
-    // Lean the torso with the aim.
-    if (this.spine) this.spine.rotation.x += -f.pitch * 0.55 + f.crouch * 0.25;
-    // Weapon: carried at the right hand, always pointing where the player aims.
-    this.recoil *= Math.exp(-dt * 14);
+    const B = this.bones;
     this.root.updateMatrixWorld(true);
-    if (this.hand) {
-      this.hand.getWorldPosition(this.tmp);
-      this.root.worldToLocal(this.tmp);
-      this.weaponHolder.position.set(this.tmp.x * 0.35 + 0.12, Math.max(this.tmp.y, 1.05 - f.crouch * 0.35) + 0.12, this.tmp.z * 0.35 - 0.28 + this.recoil * 0.05);
-    } else this.weaponHolder.position.set(0.15, 1.25, -0.3);
-    this.weaponHolder.rotation.set(f.pitch + this.recoil * 0.1, 0, 0);
+    // --- Crouch: lower the hips and bend the knees so the feet stay planted (leg IK). ---
+    if (f.crouch > 0.01 && this.hips && B.LeftFoot && B.RightFoot && B.LeftUpLeg && B.RightUpLeg && B.LeftLeg && B.RightLeg) {
+      B.LeftFoot.getWorldPosition(this.footL);
+      B.RightFoot.getWorldPosition(this.footR);
+      B.LeftFoot.getWorldQuaternion(this.footQL);
+      B.RightFoot.getWorldQuaternion(this.footQR);
+      // Lower the hips in world space (the rig's own units are not metres).
+      this.hips.getWorldPosition(this.t1);
+      this.t1.y -= f.crouch * 0.46;
+      if (this.hips.parent) this.hips.parent.worldToLocal(this.t1);
+      this.hips.position.copy(this.t1);
+      this.hips.updateMatrixWorld(true);
+      // Knees bend forward (the way the player faces).
+      this.pole.set(-Math.sin(f.yaw), 0.15, -Math.cos(f.yaw));
+      solveTwoBone(B.LeftUpLeg, B.LeftLeg, B.LeftFoot, this.footL, this.pole);
+      solveTwoBone(B.RightUpLeg, B.RightLeg, B.RightFoot, this.footR, this.pole);
+      setWorldQuaternion(B.LeftFoot, this.footQL);
+      setWorldQuaternion(B.RightFoot, this.footQR);
+    }
+    // --- Torso follows the aim. ---
+    if (this.spine) {
+      this.spine.rotation.x += -f.pitch * 0.5 + f.crouch * 0.3;
+      this.spine.updateMatrixWorld(true);
+    }
+    // --- Weapon shouldered, pointing where the player aims. ---
+    this.recoil *= Math.exp(-dt * 14);
+    const cat = WEAPONS[f.weapon].category;
+    const shoulderY = 1.44 - f.crouch * 0.47;
+    const reach = cat === 'pistol' ? 0.5 : cat === 'melee' ? 0.42 : 0.3;
+    const cp = Math.cos(f.pitch);
+    const sp2 = Math.sin(f.pitch);
+    // Pivot at the right shoulder; the grip sits `reach` metres in front of it along the aim line.
+    this.weaponHolder.position.set(0.13, shoulderY - 0.09 + sp2 * reach, -(cp * reach) + this.recoil * 0.04);
+    this.weaponHolder.rotation.set(f.pitch + this.recoil * 0.08, 0, 0);
+    this.weaponHolder.updateMatrixWorld(true);
+    // --- Arms: both hands on the weapon (arm IK). ---
+    if (this.weapon && B.RightArm && B.RightForeArm && B.RightHand && B.LeftArm && B.LeftForeArm && B.LeftHand) {
+      // Wrist targets sit slightly behind / below the grips.
+      this.weapon.gripRight.getWorldPosition(this.t1);
+      this.weapon.gripLeft.getWorldPosition(this.t2);
+      const fx = -Math.sin(f.yaw);
+      const fz = -Math.cos(f.yaw);
+      const rx = Math.cos(f.yaw);
+      const rz = -Math.sin(f.yaw);
+      this.t1.x -= fx * 0.05;
+      this.t1.z -= fz * 0.05;
+      this.t1.y -= 0.01;
+      this.pole.set(rx * 0.7 - fx * 0.2, -0.75, rz * 0.7 - fz * 0.2);
+      solveTwoBone(B.RightArm, B.RightForeArm, B.RightHand, this.t1, this.pole);
+      if (cat !== 'melee') {
+        this.t2.y -= 0.035;
+        this.pole.set(-rx * 0.6 - fx * 0.1, -0.8, -rz * 0.6 - fz * 0.1);
+        solveTwoBone(B.LeftArm, B.LeftForeArm, B.LeftHand, this.t2, this.pole);
+      }
+    }
     // Darken in dark places, glow while protected.
     const l = f.light;
     const pulse = f.protected ? 0.25 + Math.sin(performance.now() * 0.012) * 0.15 : 0;

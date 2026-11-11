@@ -84,6 +84,7 @@ class Engine implements IEngine {
   private post: Post | null = null;
   private envMap: THREE.Texture | null = null;
   private hdr: HdrSky | null = null;
+  private interiorEnv: THREE.Texture | null = null;
   private models: MapModels | null = null;
   private width = 0;
   private height = 0;
@@ -104,7 +105,7 @@ class Engine implements IEngine {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.86;
+    this.renderer.toneMappingExposure = 0.8;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.autoClear = false;
@@ -261,6 +262,7 @@ class Engine implements IEngine {
       committed = true;
       this.scene.add(builtWorld.group, builtSigns.group);
       this.applyEnv(map.env);
+      this.captureInterior(map, materials);
       // Real 3D models (furniture, vehicles…), instanced and tinted by the baked light.
       if (map.models?.length) {
         const models = await buildMapModels(map, (pos, out) => this.sampleLight(pos, out));
@@ -295,6 +297,8 @@ class Engine implements IEngine {
     this.signs?.dispose();
     this.materials?.dispose();
     this.lightmap?.dispose();
+    this.interiorEnv?.dispose();
+    this.interiorEnv = null;
     this.world = null;
     this.signs = null;
     this.materials = null;
@@ -346,6 +350,46 @@ class Engine implements IEngine {
       this.viewScene.environment = this.envMap;
     }
     this.viewScene.environmentIntensity = 0.5;
+  }
+
+  /**
+   * Capture a reflection probe inside the building (under the ceiling light closest to
+   * the centre of all lights) and hand it to the interior materials.
+   */
+  private captureInterior(map: MapData, materials: WorldMaterials): void {
+    this.interiorEnv?.dispose();
+    this.interiorEnv = null;
+    if (this.quality === 'low' || map.lights.length === 0) return;
+    try {
+      let cx = 0;
+      let cz = 0;
+      for (const l of map.lights) {
+        cx += l.pos.x;
+        cz += l.pos.z;
+      }
+      cx /= map.lights.length;
+      cz /= map.lights.length;
+      let best = map.lights[0]!;
+      let bestD = Infinity;
+      for (const l of map.lights) {
+        const d = (l.pos.x - cx) ** 2 + (l.pos.z - cz) ** 2 + (l.pos.y > 4 ? 400 : 0);
+        if (d < bestD) {
+          bestD = d;
+          best = l;
+        }
+      }
+      const rt = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType });
+      const cube = new THREE.CubeCamera(0.1, 120, rt);
+      cube.position.set(best.pos.x, Math.max(1.2, best.pos.y - 1.6), best.pos.z);
+      cube.update(this.renderer, this.scene);
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      this.interiorEnv = pmrem.fromCubemap(rt.texture).texture;
+      pmrem.dispose();
+      rt.dispose();
+      materials.setInteriorEnv(this.interiorEnv);
+    } catch (err) {
+      console.warn('[engine] sonde de réflexion intérieure indisponible :', err);
+    }
   }
 
   /** Fit the sun's shadow frustum around the whole map. */

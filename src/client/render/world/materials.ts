@@ -30,7 +30,7 @@ const DEFAULT_OPACITY = 0.5;
 const SURFACE_PBR: Record<string, [rough: number, metal: number, bump: number]> = {
   concrete: [0.9, 0, 1.2],
   tile: [0.22, 0, 0.9],
-  lino: [0.38, 0, 0.35],
+  lino: [0.2, 0, 0.25],
   carpet: [1, 0, 0.9],
   wood: [0.55, 0, 0.7],
   metal: [0.38, 0.85, 0.5],
@@ -59,6 +59,14 @@ const PBR_OVERRIDE: Partial<Record<MaterialId, [number, number, number]>> = {
   window_facade: [0.15, 0.2, 0.6],
   shopfront: [0.1, 0.3, 0.3],
 };
+
+/** Surfaces found outdoors: they keep the sky as reflection; everything else mirrors the interior probe. */
+const EXTERIOR = new Set<string>([
+  'asphalt', 'sidewalk', 'cobble', 'paving_stone', 'grass', 'dirt', 'gravel', 'water', 'brick_red', 'brick_brown',
+  'stone_yellow', 'stone_grey', 'stone_white', 'facade_cream', 'facade_grey', 'facade_white', 'facade_pink', 'facade_blue',
+  'slate_roof', 'roof_tile_red', 'window_facade', 'window_lit', 'shopfront', 'shutter', 'hedge', 'foliage', 'bark',
+  'metal_green', 'metal_rust', 'metal_blue', 'metal_red', 'rubber_black',
+]);
 
 /** World shaders: no hemisphere / diffuse IBL (ambient is baked), reflections dimmed where the baked light is dark. */
 const LIGHTS_BEGIN = THREE.ShaderChunk.lights_fragment_begin.replace(
@@ -151,6 +159,7 @@ export class WorldMaterials {
   private quality: Quality;
   private lightMap: THREE.Texture | null = null;
   private lightMapIntensity = 1;
+  private interiorEnv: THREE.Texture | null = null;
 
   constructor(quality: Quality) {
     this.quality = quality;
@@ -169,7 +178,7 @@ export class WorldMaterials {
       // Self-illuminated surfaces (light panels, screens): the texture glows and feeds the bloom.
       m.emissive = new THREE.Color(0xffffff);
       m.emissiveMap = map;
-      m.emissiveIntensity = id === 'light_panel' || id === 'light_warm' ? 1.7 : 1.1;
+      m.emissiveIntensity = id === 'light_panel' || id === 'light_warm' ? 1.35 : 1.0;
       m.color.setScalar(0.2);
     } else if (this.quality !== 'low') {
       const photo = photoSet(id);
@@ -211,6 +220,10 @@ export class WorldMaterials {
       m.lightMap = this.lightMap;
       m.lightMapIntensity = this.lightMapIntensity;
     }
+    if (this.interiorEnv && !EXTERIOR.has(id)) {
+      m.envMap = this.interiorEnv;
+      m.envMapIntensity = 1.15;
+    }
     this.materials.set(id, m);
     return m;
   }
@@ -240,6 +253,20 @@ export class WorldMaterials {
       if (m.roughnessMap) continue; // photographic set: independent of the quality level
       m.map = getMaterialTexture(id, quality);
       if (m.emissiveMap) m.emissiveMap = m.map;
+      m.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Reflection probe captured inside the building: glossy interior surfaces mirror the
+   * room (ceiling lights, walls) instead of the sky.
+   */
+  setInteriorEnv(texture: THREE.Texture | null): void {
+    this.interiorEnv = texture;
+    for (const [id, m] of this.materials) {
+      if (EXTERIOR.has(id)) continue;
+      m.envMap = texture;
+      m.envMapIntensity = texture ? 1.15 : 0.9;
       m.needsUpdate = true;
     }
   }

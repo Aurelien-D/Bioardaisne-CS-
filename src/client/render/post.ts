@@ -5,6 +5,7 @@
  */
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
@@ -39,6 +40,18 @@ const GradeShader = {
     }`,
 };
 
+/** True when WebGL runs on the CPU (no graphics acceleration): the costliest effects are skipped. */
+function softwareRenderer(renderer: THREE.WebGLRenderer): boolean {
+  try {
+    const gl = renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+    return /swiftshader|llvmpipe|software/i.test(name) && !new URLSearchParams(location.search).has('forceao');
+  } catch {
+    return false;
+  }
+}
+
 export interface Post {
   render(time: number): void;
   setSize(width: number, height: number, pixelRatio: number): void;
@@ -60,10 +73,18 @@ export function createPost(
   const view = new RenderPass(viewScene, viewCamera);
   view.clear = false;
   view.clearDepth = true;
-  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.22, 0.6, 1.0);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.16, 0.5, 1.05);
   const output = new OutputPass();
   const grade = new ShaderPass(GradeShader);
   composer.addPass(world);
+  // Ambient occlusion (contact shadows in corners and under furniture) on the best preset.
+  let gtao: GTAOPass | null = null;
+  if (quality === 'high' && !softwareRenderer(renderer)) {
+    gtao = new GTAOPass(scene, camera, size.x, size.y);
+    gtao.updateGtaoMaterial({ radius: 0.55, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 12 });
+    gtao.blendIntensity = 0.9;
+    composer.addPass(gtao);
+  }
   composer.addPass(view);
   composer.addPass(bloom);
   composer.addPass(output);
