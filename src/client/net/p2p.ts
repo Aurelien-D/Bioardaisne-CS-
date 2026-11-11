@@ -33,6 +33,9 @@ const GUEST_TIMEOUT_MS = 30000;
  */
 const HOST_TIMEOUT_MS = 20000;
 
+/** Above this many bytes waiting in a guest's channel, world snapshots are skipped for that guest. */
+const SNAPSHOT_BACKLOG_BYTES = 96 * 1024;
+
 /** Address of a room on the broker. */
 const peerId = (code: string): string => `bioardaisne-strike-${code}`;
 
@@ -165,6 +168,9 @@ export class P2PHost implements Connection {
 
   private sendTo(guest: Guest, msg: ServerMsg): void {
     if (!guest.conn.open) return;
+    // A guest on a slow link: skip world snapshots while its channel is backed up, rather than
+    // queueing seconds of stale state (the next snapshot it does get is complete anyway).
+    if (msg.t === 's' && (guest.conn.dataChannel?.bufferedAmount ?? 0) > SNAPSHOT_BACKLOG_BYTES) return;
     try {
       guest.conn.send(JSON.stringify(msg));
     } catch {

@@ -165,6 +165,8 @@ Outils :
 | `npx tsx tools/sim-bench.ts --map <carte> --bots 10 --minutes 4` | Match de bots sans affichage (équilibre, blocages, performances) |
 | `node tools/e2e/solo.cjs` et `node tools/e2e/multi.cjs` | Tests de bout en bout dans un navigateur sans affichage (après `npm run build`, nécessitent Playwright) |
 | `node tools/e2e/multi.cjs --p2p` | Même test à deux joueurs **sans serveur de jeu** (après `BAS_BASE=./ BAS_STATIC=1 npx vite build --outDir dist/static`) |
+| `node tools/e2e/multi.cjs --p2p --public-broker` | Idem en passant par le service public PeerJS (nécessite un accès Internet) |
+| `node tools/e2e/p2p-party.cjs --guests 2` | Salon hébergé par un navigateur avec plusieurs invités, puis départ de l'hôte |
 | `node tools/e2e/look.cjs` | Captures en vue subjective (hanche, visée, tir) |
 | `npm run build:client && node tools/make-artifact.mjs <fichier.html>` | Assemble le jeu en **une seule page HTML** (solo uniquement, sans serveur) |
 
