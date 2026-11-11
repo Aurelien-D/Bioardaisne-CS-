@@ -1046,6 +1046,7 @@ export class Game {
         punchYaw: me.punchYaw,
         zoom: me.zoom,
         ads: this.ads,
+        team: this.myTeam(),
         light: this.light,
       });
     } else if (this.deathPos) {

@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { WEAPONS, type WeaponId } from '../../../shared/weapons/defs';
 import type { IViewModel, ViewModelFrame } from '../../core/contracts';
+import { createFirstPersonArms, soldierReady, type FirstPersonArms } from '../avatar/soldier';
 import { createWeaponModel, type WeaponModel } from '../weapons/models';
 
 const HIP: Record<string, [number, number, number]> = {
@@ -43,6 +44,11 @@ class ViewModel implements IViewModel {
   private slashSide = 1;
   private landDip = 0;
   private wasGround = true;
+  /** Realistic arms (the player model's own), once the character is loaded. */
+  private fp: FirstPersonArms | null = null;
+  private fpTeam = -1;
+  private gR = new THREE.Vector3();
+  private gL = new THREE.Vector3();
 
   constructor() {
     this.root.add(this.holder);
@@ -277,6 +283,7 @@ class ViewModel implements IViewModel {
     }
     this.holder.position.set(x, y, z);
     this.holder.rotation.set(rx, ry, rz);
+    this.updateArms(f, cat);
 
     // Muzzle flash.
     if (this.flashT > 0 && this.model) {
@@ -296,6 +303,36 @@ class ViewModel implements IViewModel {
     this.mats[1]!.color.setRGB(0.23 * l, 0.56 * l, 0.88 * l);
     this.mats[2]!.color.copy(this.mats[0]!.color);
     this.mats[3]!.color.copy(this.mats[1]!.color);
+  }
+
+  /** Pose the character's own arms on the weapon (falls back to the simple sleeves). */
+  private updateArms(f: ViewModelFrame, cat: string): void {
+    const team = f.team ?? 0;
+    if (soldierReady() && (!this.fp || this.fpTeam !== team)) {
+      this.fp?.dispose();
+      this.fp = createFirstPersonArms(team);
+      this.fpTeam = team;
+      if (this.fp) this.root.add(this.fp.root);
+    }
+    if (!this.fp || !this.model) return;
+    this.armR.visible = this.armL.visible = false;
+    this.root.updateMatrixWorld(true);
+    // Wrists sit a little behind and below the grips (targets in the root's space).
+    this.model.gripRight.getWorldPosition(this.gR);
+    this.root.worldToLocal(this.gR);
+    this.gR.z += 0.045;
+    this.gR.y -= 0.01;
+    let left: THREE.Vector3 | null = null;
+    if (cat !== 'melee') {
+      this.model.gripLeft.getWorldPosition(this.gL);
+      this.root.worldToLocal(this.gL);
+      // Support hand a little short of the fore-end tip so the arm stays bent.
+      this.gL.lerpVectors(this.gR, this.gL, 0.72);
+      this.gL.y -= 0.035;
+      this.gL.x -= 0.015;
+      left = this.gL;
+    }
+    this.fp.update(this.gR, left, (f.light.r + f.light.g + f.light.b) / 3);
   }
 
   getMuzzle(out: THREE.Vector3): THREE.Vector3 {

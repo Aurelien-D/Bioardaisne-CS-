@@ -68,6 +68,8 @@ export interface ViewModelFrame {
   zoom: number;
   /** Aim-down-sights blend, 0 (hip) … 1 (sights aligned with the screen centre). */
   ads: number;
+  /** Team of the local player (colour of the first-person arms). */
+  team?: number;
   /** Light colour at the player's position. */
   light: THREE.Color;
 }

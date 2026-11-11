@@ -297,3 +297,113 @@ export class SoldierAvatar implements IAvatar {
     void this.pitch;
   }
 }
+
+// ---------------------------------------------------------------------------------
+// First-person arms: the same character, with everything but the arms discarded in
+// the shader, posed by IK so the hands hold the weapon.
+// ---------------------------------------------------------------------------------
+
+export interface FirstPersonArms {
+  root: THREE.Group;
+  /** Wrist targets in the root's parent space (view space). `gripL` null = one-handed. */
+  update(gripR: THREE.Vector3, gripL: THREE.Vector3 | null, light: number): void;
+  dispose(): void;
+}
+
+/** Tunable pose constants (radians / metres), adjusted against screenshots. */
+const FP = {
+  scale: 1.0,
+  /** Where the character's feet go so that its eyes sit at the camera. */
+  y: -1.82,
+  z: -0.02,
+  x: 0.05,
+  curl: 1.15,
+};
+
+export function createFirstPersonArms(team: number): FirstPersonArms | null {
+  const t = template;
+  if (!t) return null;
+  const root = new THREE.Group();
+  const pivot = new THREE.Group();
+  const model = cloneSkinned(t.scene);
+  pivot.rotation.y = t.yaw;
+  pivot.scale.setScalar(t.scale * FP.scale);
+  pivot.position.set(FP.x, FP.y * FP.scale, FP.z);
+  pivot.add(model);
+  root.add(pivot);
+  const tint = TEAM_TINT[team] ?? [0.3, 0.3, 0.3];
+  const mats: THREE.MeshStandardMaterial[] = [];
+  const base: THREE.Color[] = [];
+  model.traverse((o) => {
+    const mesh = o as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh) return;
+    mesh.frustumCulled = false;
+    const mask = new Float32Array(128);
+    mesh.skeleton.bones.forEach((b, i) => {
+      if (i < 128 && /(Left|Right)(Arm|ForeArm|Hand)/.test(b.name)) mask[i] = 1;
+    });
+    const m = (mesh.material as THREE.MeshStandardMaterial).clone();
+    m.color.setRGB(m.color.r * tint[0], m.color.g * tint[1], m.color.b * tint[2]);
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms.basArm = { value: mask };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <skinning_pars_vertex>', '#include <skinning_pars_vertex>\nuniform float basArm[128];\nvarying float vBasArm;')
+        .replace(
+          '#include <skinbase_vertex>',
+          '#include <skinbase_vertex>\nvBasArm = dot( skinWeight, vec4( basArm[ int( skinIndex.x ) ], basArm[ int( skinIndex.y ) ], basArm[ int( skinIndex.z ) ], basArm[ int( skinIndex.w ) ] ) );',
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vBasArm;')
+        .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif ( vBasArm < 0.5 ) discard;');
+    };
+    m.customProgramCacheKey = () => 'bas-fp-arms';
+    mesh.material = m;
+    mats.push(m);
+    base.push(m.color.clone());
+  });
+  const bone = (n: string): THREE.Object3D | null => model.getObjectByName(`mixamorig${n}`) ?? null;
+  const chain = {
+    ra: bone('RightArm'),
+    rf: bone('RightForeArm'),
+    rh: bone('RightHand'),
+    la: bone('LeftArm'),
+    lf: bone('LeftForeArm'),
+    lh: bone('LeftHand'),
+  };
+  // Rest pose of the arm bones (IK starts from it every frame) and curled fingers.
+  const rest = new Map<THREE.Object3D, THREE.Quaternion>();
+  for (const b of Object.values(chain)) if (b) rest.set(b, b.quaternion.clone());
+  model.traverse((o) => {
+    const m = /^mixamorig(Left|Right)Hand(Index|Middle|Ring|Pinky)([123])$/.exec(o.name);
+    if (m) o.rotateZ((m[1] === 'Right' ? -1 : 1) * FP.curl * (m[3] === '1' ? 0.75 : 1));
+  });
+  const pole = new THREE.Vector3();
+  const tgt = new THREE.Vector3();
+  return {
+    root,
+    update(gripR, gripL, light) {
+      for (const [b, q] of rest) b.quaternion.copy(q);
+      root.updateMatrixWorld(true);
+      if (chain.ra && chain.rf && chain.rh) {
+        root.localToWorld(tgt.copy(gripR));
+        solveTwoBone(chain.ra, chain.rf, chain.rh, tgt, pole.set(0.75, -0.65, 0.1));
+      }
+      if (chain.la && chain.lf && chain.lh) {
+        if (gripL) {
+          root.localToWorld(tgt.copy(gripL));
+          solveTwoBone(chain.la, chain.lf, chain.lh, tgt, pole.set(-0.75, -0.65, 0.1));
+        } else {
+          // Free hand: tucked low, out of view.
+          root.localToWorld(tgt.set(-0.25, -0.6, -0.05));
+          solveTwoBone(chain.la, chain.lf, chain.lh, tgt, pole.set(-0.75, -0.65, 0.1));
+        }
+      }
+      const s = 0.5 + 0.5 * Math.min(1.2, light);
+      for (let i = 0; i < mats.length; i++) mats[i]!.color.setRGB(base[i]!.r * s, base[i]!.g * s, base[i]!.b * s);
+    },
+    dispose() {
+      root.removeFromParent();
+      for (const m of mats) m.dispose();
+    },
+  };
+}
