@@ -14,7 +14,9 @@
  * sun direction — and are expected to multiply their colours by `sampleLight(pos)`, which
  * carries the local light colour and level (light probes, dark in dark corridors).
  */
-import { createEnvironment } from './env';
+import { createEnvironment, loadHdrSky, type HdrSky } from './env';
+import { preloadPhotoTextures } from './textures/photo';
+import type { MaterialId } from '../../shared/maps/materials';
 import { createPost, type Post } from './post';
 import * as THREE from 'three';
 import { DEFAULT_ENV } from '../../shared/maps/builder';
@@ -80,6 +82,7 @@ class Engine implements IEngine {
   private sizeDirty = true;
   private post: Post | null = null;
   private envMap: THREE.Texture | null = null;
+  private hdr: HdrSky | null = null;
   private width = 0;
   private height = 0;
   private disposed = false;
@@ -175,6 +178,18 @@ class Engine implements IEngine {
 
     try {
       if (!(await stage(0.02, 'Préparation des paillasses…'))) return abandon();
+      if (this.quality !== 'low') {
+        // Photographic textures and sky (kept procedural if they cannot be fetched).
+        const used = new Set<MaterialId>();
+        for (const b of map.boxes) {
+          used.add(b.mat);
+          if (b.faces) for (const f of Object.values(b.faces)) if (f) used.add(f);
+        }
+        for (const p of map.prims) used.add(p.mat);
+        const [, sky] = await Promise.all([preloadPhotoTextures(used), map.env.sunIntensity > 0 ? loadHdrSky(this.renderer) : Promise.resolve(null)]);
+        this.hdr = sky;
+        if (!wanted()) return abandon();
+      } else this.hdr = null;
       materials = new WorldMaterials(this.quality);
 
       // --- Baked lighting (time-sliced; instant when this map was baked before) ---
@@ -287,14 +302,35 @@ class Engine implements IEngine {
     this.sun.target.position.set(0, 0, 0);
     // Real-time sun: colour and strength of the map (interior-only maps have none).
     this.sun.color.set(env.sunColor);
-    this.sun.intensity = env.sunIntensity > 0 ? Math.PI * 1.55 * env.sunIntensity : 0;
+    this.sun.intensity = env.sunIntensity > 0 ? Math.PI * 1.05 * env.sunIntensity : 0;
     this.viewSun.color.set(env.sunIntensity > 0 ? env.sunColor : 0xffffff);
     // Reflection environment shared by the world, the avatars' weapons and the view model.
     this.envMap?.dispose();
-    this.envMap = createEnvironment(this.renderer, env);
-    this.scene.environment = this.envMap;
-    this.viewScene.environment = this.envMap;
-    this.viewScene.environmentIntensity = 1.25;
+    this.envMap = null;
+    const hdr = env.sunIntensity > 0 && this.world ? this.hdr : null;
+    if (hdr) {
+      // Real sky: rotate the picture so that its sun sits at the map's sun azimuth,
+      // and use the picture's own sun elevation for the real-time light.
+      const theta = Math.atan2(hdr.sunDir.z, hdr.sunDir.x) - Math.atan2(this.sunDir.z, this.sunDir.x);
+      const flat = Math.hypot(this.sunDir.x, this.sunDir.z) || 1;
+      const el = Math.max(0.2, Math.asin(Math.min(1, Math.max(-1, hdr.sunDir.y))));
+      this.sunDir.set((this.sunDir.x / flat) * Math.cos(el), Math.sin(el), (this.sunDir.z / flat) * Math.cos(el)).normalize();
+      this.sun.position.copy(this.sunDir).multiplyScalar(50);
+      this.scene.background = hdr.background;
+      this.scene.backgroundRotation.set(0, theta, 0);
+      this.scene.environmentRotation.set(0, theta, 0);
+      this.scene.backgroundIntensity = 1;
+      this.scene.environment = hdr.env;
+      this.viewScene.environment = hdr.env;
+      this.sky.mesh.visible = false;
+    } else {
+      this.scene.background = null;
+      this.sky.mesh.visible = true;
+      this.envMap = createEnvironment(this.renderer, env);
+      this.scene.environment = this.envMap;
+      this.viewScene.environment = this.envMap;
+    }
+    this.viewScene.environmentIntensity = 0.5;
   }
 
   /** Fit the sun's shadow frustum around the whole map. */

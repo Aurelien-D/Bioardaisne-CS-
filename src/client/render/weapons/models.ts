@@ -25,9 +25,9 @@ export interface WeaponModel {
 type Mat = 'gunmetal' | 'steel' | 'polymer' | 'polymerDark' | 'wood' | 'woodDark' | 'rubber' | 'blue' | 'bakelite' | 'glass' | 'brass' | 'tan';
 
 const MATS: Record<Mat, THREE.MeshStandardMaterial> = {
-  gunmetal: new THREE.MeshStandardMaterial({ color: 0x41454b, metalness: 0.8, roughness: 0.42 }),
+  gunmetal: new THREE.MeshStandardMaterial({ color: 0x2c2f34, metalness: 0.75, roughness: 0.5 }),
   steel: new THREE.MeshStandardMaterial({ color: 0x9aa0a6, metalness: 1, roughness: 0.28 }),
-  polymer: new THREE.MeshStandardMaterial({ color: 0x34373b, metalness: 0.05, roughness: 0.68 }),
+  polymer: new THREE.MeshStandardMaterial({ color: 0x26282b, metalness: 0.05, roughness: 0.72 }),
   polymerDark: new THREE.MeshStandardMaterial({ color: 0x1c1d1f, metalness: 0.05, roughness: 0.85 }),
   wood: new THREE.MeshStandardMaterial({ color: 0x7a4a26, metalness: 0, roughness: 0.55 }),
   woodDark: new THREE.MeshStandardMaterial({ color: 0x4a2c16, metalness: 0, roughness: 0.6 }),

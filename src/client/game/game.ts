@@ -20,7 +20,7 @@ import { createAudio } from '../audio';
 import type { HudFrame, IAudio, IAvatar, IEffects, IEngine, IHud, IViewModel } from '../core/contracts';
 import { radiansPerCount, SettingsStore, type KeyAction } from '../core/settings';
 import { LocalConnection, WsConnection } from '../net/connection';
-import { createAvatar } from '../render/avatar';
+import { createAvatar, preloadAvatarAssets } from '../render/avatar';
 import { createEffects } from '../render/effects';
 import { createEngine } from '../render/engine';
 import { createViewModel } from '../render/viewmodel';
@@ -297,6 +297,7 @@ export class Game {
     await new Promise((r) => setTimeout(r, 30));
     const map = getMap(mapId);
     const world = new CollisionWorld(map.solids);
+    if (this.settings.value.quality !== 'low') await Promise.race([preloadAvatarAssets(), new Promise((r) => setTimeout(r, 15000))]);
     await this.engine.loadMap(map, world, (f, label) => {
       if (token === this.loadToken) this.menus.showLoading(label, 0.05 + f * 0.95);
     });

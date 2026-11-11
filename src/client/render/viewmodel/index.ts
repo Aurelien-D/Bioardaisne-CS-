@@ -87,7 +87,7 @@ class ViewModel implements IViewModel {
   /** Forearm (white lab-coat sleeve) + blue nitrile glove; origin at the hand. */
   private makeArm(): THREE.Group {
     const g = new THREE.Group();
-    const sleeve = new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.9 });
+    const sleeve = new THREE.MeshStandardMaterial({ color: 0x1f2b40, roughness: 0.95 });
     const glove = new THREE.MeshStandardMaterial({ color: 0x3a8fe0, roughness: 0.55 });
     this.mats.push(sleeve, glove);
     const fore = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.075, 0.34), sleeve);
@@ -292,7 +292,7 @@ class ViewModel implements IViewModel {
     }
     // Darken the arms in dark places.
     const l = Math.min(1.2, Math.max(0.35, (f.light.r + f.light.g + f.light.b) / 3));
-    this.mats[0]!.color.setRGB(0.95 * l, 0.95 * l, 0.93 * l);
+    this.mats[0]!.color.setRGB(0.12 * l, 0.17 * l, 0.25 * l); // dark navy sleeve
     this.mats[1]!.color.setRGB(0.23 * l, 0.56 * l, 0.88 * l);
     this.mats[2]!.color.copy(this.mats[0]!.color);
     this.mats[3]!.color.copy(this.mats[1]!.color);

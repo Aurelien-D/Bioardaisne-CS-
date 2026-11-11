@@ -6,6 +6,7 @@ import type { Vec3 } from '../../../shared/math/vec3';
 import { WEAPONS, type WeaponId } from '../../../shared/weapons/defs';
 import type { AvatarFrame, IAvatar } from '../../core/contracts';
 import { createWeaponModel, type WeaponModel } from '../weapons/models';
+import { preloadSoldier, SoldierAvatar, soldierReady } from './soldier';
 
 const SKIN = [0xf1c9a5, 0xe0ac7e, 0xc68642, 0x8d5524, 0xf6d7bd];
 const HAIR = [0x2b1b12, 0x5a3a1e, 0x111111, 0xb88a4a, 0x7a7a7a, 0x8a3b1e];
@@ -250,6 +251,9 @@ class Avatar implements IAvatar {
   }
 }
 
+/** Realistic rigged soldier when the model is loaded, procedural silhouette otherwise. */
 export function createAvatar(team: TeamId, name: string): IAvatar {
-  return new Avatar(team, name);
+  return soldierReady() ? new SoldierAvatar(team) : new Avatar(team, name);
 }
+
+export { preloadSoldier as preloadAvatarAssets };

@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { materialInfo, type MaterialId } from '../../../shared/maps/materials';
 import type { Quality } from '../../core/settings';
 import { getMaterialTexture } from '../textures';
+import { photoSet } from '../textures/photo';
 
 const OPACITY: Partial<Record<MaterialId, number>> = {
   glass: 0.32,
@@ -171,10 +172,20 @@ export class WorldMaterials {
       m.emissiveIntensity = id === 'light_panel' || id === 'light_warm' ? 1.7 : 1.1;
       m.color.setScalar(0.2);
     } else if (this.quality !== 'low') {
-      const n = normalMapFor(id, this.quality, map, bump);
-      if (n) {
-        m.normalMap = n;
-        m.normalScale.set(1, 1);
+      const photo = photoSet(id);
+      if (photo) {
+        // Photographic PBR set: albedo, normal and roughness maps.
+        m.map = photo.map;
+        m.normalMap = photo.normalMap;
+        m.roughnessMap = photo.roughnessMap;
+        m.roughness = 1;
+        m.color.copy(photo.color);
+      } else {
+        const n = normalMapFor(id, this.quality, map, bump);
+        if (n) {
+          m.normalMap = n;
+          m.normalScale.set(1, 1);
+        }
       }
     }
     if (info.transparent) {
@@ -226,6 +237,7 @@ export class WorldMaterials {
     if (quality === this.quality) return;
     this.quality = quality;
     for (const [id, m] of this.materials) {
+      if (m.roughnessMap) continue; // photographic set: independent of the quality level
       m.map = getMaterialTexture(id, quality);
       if (m.emissiveMap) m.emissiveMap = m.map;
       m.needsUpdate = true;

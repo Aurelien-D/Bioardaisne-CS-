@@ -4,6 +4,7 @@
  * pick up believable reflections without any HDR file.
  */
 import * as THREE from 'three';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { EnvDef } from '../../shared/maps/types';
 
 export function createEnvironment(renderer: THREE.WebGLRenderer, env: EnvDef): THREE.Texture {
@@ -55,4 +56,61 @@ export function createEnvironment(renderer: THREE.WebGLRenderer, env: EnvDef): T
   panelGeo.dispose();
   panelMat.dispose();
   return target.texture;
+}
+
+// ---------------------------------------------------------------------------------
+// Photographic sky (CC0 HDRI, Poly Haven): real sky dome and reflections.
+// ---------------------------------------------------------------------------------
+
+export interface HdrSky {
+  /** Equirectangular HDR texture, usable as scene.background. */
+  background: THREE.Texture;
+  /** Pre-filtered reflection environment. */
+  env: THREE.Texture;
+  /** Direction to the sun in the picture's own frame (before any rotation). */
+  sunDir: THREE.Vector3;
+}
+
+let hdrPromise: Promise<HdrSky | null> | null = null;
+
+/** Load the HDR sky once. Resolves to null if the file is missing (procedural sky is kept). */
+export function loadHdrSky(renderer: THREE.WebGLRenderer): Promise<HdrSky | null> {
+  if (!hdrPromise) {
+    hdrPromise = (async () => {
+      try {
+        const tex = await new RGBELoader().loadAsync(new URL('media/hdr/sky.hdr', document.baseURI).href);
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        // Brightest texel = the sun.
+        const img = tex.image as { data: Uint16Array | Float32Array; width: number; height: number };
+        const half = tex.type === THREE.HalfFloatType;
+        let best = -1;
+        let bi = 0;
+        const n = img.width * img.height;
+        for (let i = 0; i < n; i += 2) {
+          const r = half ? THREE.DataUtils.fromHalfFloat(img.data[i * 4]!) : img.data[i * 4]!;
+          const g = half ? THREE.DataUtils.fromHalfFloat(img.data[i * 4 + 1]!) : img.data[i * 4 + 1]!;
+          const l = r + g;
+          if (l > best) {
+            best = l;
+            bi = i;
+          }
+        }
+        const col = bi % img.width;
+        const row = Math.floor(bi / img.width);
+        const u = (col + 0.5) / img.width;
+        const v = tex.flipY ? 1 - (row + 0.5) / img.height : (row + 0.5) / img.height;
+        const az = (u - 0.5) * Math.PI * 2;
+        const el = (v - 0.5) * Math.PI;
+        const sunDir = new THREE.Vector3(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el));
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        const env = pmrem.fromEquirectangular(tex).texture;
+        pmrem.dispose();
+        return { background: tex, env, sunDir };
+      } catch (err) {
+        console.warn('[env] ciel HDR indisponible, ciel procédural utilisé :', err);
+        return null;
+      }
+    })();
+  }
+  return hdrPromise;
 }
