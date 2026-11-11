@@ -128,6 +128,8 @@ export interface S_Snapshot {
   p: RemoteTuple[];
   /** Events since the previous snapshot. */
   ev: GameEvent[];
+  /** When dead in a respawn mode: server clock (ms) of the next respawn. */
+  rs?: number;
 }
 
 export interface S_Roster {
