@@ -10,7 +10,7 @@
  * Niveaux : rez-de-chaussée 0, étage +4,0 m.
  */
 import { MapBuilder } from './builder';
-import { ceiling, ceilingLights, floor, railing, stairs, wall, type Opening } from './helpers';
+import { ceiling, ceilingLights, doorLeaf, floor, railing, stairs, wall, type Opening } from './helpers';
 import type { MaterialId } from './materials';
 import { placeProp } from './props';
 import type { MapData, MapMeta } from './types';
@@ -337,10 +337,10 @@ export function build(): MapData {
   P('photocopier', 23.2, 14.2, 2);
   P('plant_small', 30.2, 14.2, 0);
   // Tri
-  P('lab_bench', 20, 15.13, 0, 0, 'back');
-  P('label_printer', 19.6, 15.35, 0, 0.9);
-  P('tube_box', 20.5, 15.35, 0, 0.9);
-  P('transport_crate', 18.7, 18.2, 0);
+  P('lab_bench', 18.13, 17, 1, 0, 'back');
+  P('label_printer', 18.45, 16.6, 1, 0.9);
+  P('tube_box', 18.45, 17.5, 1, 0.9);
+  P('transport_crate', 21.3, 18.3, 0);
   // Boxes de prélèvement
   for (const x of [23.5, 26.5, 29.5]) {
     P('phlebotomy_chair', x - 0.3, 16.2, 0);
@@ -351,11 +351,11 @@ export function build(): MapData {
   P('wash_basin', 29.5, 15.13, 0, 0, 'back');
   // Couloir des prélèvements
   P('gel_stand', 21.2, 21.5, 0);
-  P('waiting_chairs_3', 26.5, 21.87, 2, 0, 'back');
+  P('waiting_chairs_3', 25.5, 21.87, 2, 0, 'back');
   // Accueil + attente
   P('reception_desk_l', 21, 25.5, 1);
   P('ticket_kiosk', 25.6, 31.4, 2);
-  P('waiting_chairs_4', 28.5, 22.13, 0, 0, 'back');
+  P('waiting_chairs_4', 29.6, 22.13, 0, 0, 'back');
   P('waiting_chairs_4', 30.87, 26.5, 3, 0, 'back');
   P('waiting_chairs_3', 27.5, 28.5, 0);
   P('coffee_table', 28, 25.8, 0);
@@ -399,6 +399,43 @@ export function build(): MapData {
   P('kitchen_counter', 35.87, 19.5, 3, F1, 'back');
   P('coffee_machine', 35.6, 19.5, 3, F1 + 0.9);
   P('plant_large', 35, 31.8, 0, F1);
+
+  // Battants de porte, ouverts et repliés contre les murs (décor, sans collision)
+  const leaf = (x: number, z: number, axis: 'x' | 'z', width: number, hinge: 'low' | 'high', swing: 'pos' | 'neg', y = 0, mat: MaterialId = 'door_white', glazed = false, height = 2.15): void => {
+    doorLeaf(b, { x, z, y, axis, width, height, wallThickness: 0.25, hinge, swing, open: 180, mat, glazed });
+  };
+  /** Deux vantaux d'une porte double. */
+  const leaves = (x: number, z: number, axis: 'x' | 'z', width: number, swing: 'pos' | 'neg', y = 0, mat: MaterialId = 'door_white', glazed = true, height = 2.25): void => {
+    const h = width / 4;
+    if (axis === 'z') {
+      leaf(x, z - h, axis, width / 2, 'low', swing, y, mat, glazed, height);
+      leaf(x, z + h, axis, width / 2, 'high', swing, y, mat, glazed, height);
+    } else {
+      leaf(x - h, z, axis, width / 2, 'low', swing, y, mat, glazed, height);
+      leaf(x + h, z, axis, width / 2, 'high', swing, y, mat, glazed, height);
+    }
+  };
+  leaves(18, 20.5, 'z', 2, 'neg'); // plateau technique ↔ couloir
+  leaves(18, 26.75, 'z', 1.6, 'neg'); // plateau technique ↔ accueil
+  leaf(18, 11.5, 'z', 1.4, 'high', 'neg'); // laverie ↔ bureaux
+  leaf(20, 15, 'x', 1.4, 'high', 'neg'); // bureaux ↔ tri
+  leaves(31, 20.5, 'z', 1.5, 'pos'); // couloir ↔ hall
+  leaf(36, 19.5, 'z', 1.4, 'high', 'pos'); // hall ↔ annexe
+  leaf(39, 16, 'x', 1.4, 'high', 'pos'); // salle de repos ↔ réserve
+  leaf(39, 25, 'x', 1.4, 'low', 'neg'); // réserve ↔ dépôt
+  leaf(24, 8, 'x', 1.4, 'high', 'neg', 0, 'door_metal'); // bureaux → cour
+  leaf(39, 8, 'x', 1.4, 'low', 'neg', 0, 'door_metal'); // salle de repos → cour
+  leaf(38.5, 33, 'x', 1.5, 'high', 'pos', 0, 'door_metal'); // dépôt → rue
+  leaf(3, 30, 'z', 1.4, 'low', 'neg', 0, 'door_metal'); // plateau → passage ouest
+  leaf(21, 19, 'x', 1.4, 'high', 'pos', F1);
+  leaf(28, 19, 'x', 1.4, 'high', 'pos', F1);
+  leaf(21.5, 22, 'x', 1.4, 'low', 'neg', F1);
+  leaf(27.5, 22, 'x', 1.4, 'low', 'neg', F1);
+  leaf(24.5, 13.5, 'z', 1.3, 'high', 'pos', F1);
+  leaf(24.5, 27, 'z', 1.3, 'low', 'neg', F1);
+  leaf(18, 11.5, 'z', 1.4, 'high', 'neg', F1, 'door_white', true); // bureaux → terrasse
+  // Boxes de prélèvement : portes ouvertes à 90° vers l'intérieur
+  for (const dx of [23.5, 26.5, 29.5]) doorLeaf(b, { x: dx, z: 19, axis: 'x', width: 1.2, height: 2.15, wallThickness: 0.25, hinge: 'high', swing: 'neg', open: 90, mat: 'door_white' });
 
   // Compléments de mobilier : bureaux du rez-de-chaussée
   P('workstation', 24.3, 12.9, 2);
@@ -444,8 +481,8 @@ export function build(): MapData {
   P('drawer_unit', 21.6, 11.1, 0, F1);
   // Étage : couloir, secrétariat, salle de réunion
   P('plant_small', 30.4, 20.5, 0, F1);
-  P('notice_board', 21.5, 19.13, 0, F1, 'back');
-  P('fire_extinguisher', 26, 21.87, 2, F1, 'back');
+  P('notice_board', 24.6, 19.13, 0, F1, 'back');
+  P('fire_extinguisher', 24, 21.87, 2, F1, 'back');
   P('office_cupboard', 18.13, 30, 1, F1, 'back');
   P('office_cupboard', 18.13, 31.1, 1, F1, 'back');
   P('plant_small', 18.6, 22.7, 0, F1);

@@ -305,7 +305,7 @@ class Engine implements IEngine {
       this.captureInterior(map, materials);
       // Real 3D models (furniture, vehicles…), instanced and tinted by the baked light.
       if (map.models?.length) {
-        const models = await buildMapModels(map, (pos, out) => this.sampleLight(pos, out));
+        const models = await buildMapModels(map, (pos, out) => this.sampleLight(pos, out), this.interiorEnv);
         if (!wanted()) {
           models.dispose();
           return;
