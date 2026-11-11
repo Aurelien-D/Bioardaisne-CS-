@@ -381,7 +381,7 @@ class Engine implements IEngine {
       this.scene.background = hdr.background;
       this.scene.backgroundRotation.set(0, theta, 0);
       this.scene.environmentRotation.set(0, theta, 0);
-      this.scene.backgroundIntensity = 1;
+      this.scene.backgroundIntensity = 0.72;
       this.scene.environment = hdr.env;
       this.viewScene.environment = hdr.env;
       this.sky.mesh.visible = false;
@@ -537,7 +537,7 @@ class Engine implements IEngine {
     const out = Math.max(Math.abs(this.tmpSun.x), Math.abs(this.tmpSun.y));
     const edge = 1 - Math.min(1, Math.max(0, (out - 1.05) / 0.7));
     const k = Math.min(1, (facing - 0.05) / 0.35) * edge;
-    post.setSun(u, v, 0.42 * k, this.sun.color);
+    post.setSun(u, v, 0.34 * k, this.sun.color);
   }
 
   render(): void {

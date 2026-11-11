@@ -99,6 +99,12 @@ const REFLECT_PARS = /* glsl */ `
 	uniform float basReflOn;
 #endif
 `;
+/** A glossy floor facing a low sun: keep the glare from bleaching the whole ground. */
+const SPEC_CLAMP = /* glsl */ `
+#ifdef BAS_REFLECT
+	reflectedLight.directSpecular = min( reflectedLight.directSpecular, vec3( BAS_SPEC_MAX ) );
+#endif
+`;
 const REFLECT_APPLY = /* glsl */ `
 #if defined( BAS_REFLECT ) && defined( RE_IndirectSpecular )
 	if ( basReflOn > 0.5 ) {
@@ -241,8 +247,8 @@ export class WorldMaterials {
     if (reflective) {
       // Outdoor ground is damp after a shower: smoother than the dry photo, so it mirrors the low sun.
       const outdoor = id === 'asphalt' || id === 'sidewalk' || id === 'paving_stone' || id === 'cobble';
-      if (outdoor) m.roughness *= id === 'asphalt' ? 0.5 : 0.62;
-      m.defines = { ...m.defines, BAS_REFLECT: '', BAS_REFLECT_GAIN: outdoor ? '0.9' : '1.0' };
+      if (outdoor) m.roughness *= id === 'asphalt' ? 0.7 : 0.78;
+      m.defines = { ...m.defines, BAS_REFLECT: '', BAS_REFLECT_GAIN: outdoor ? '0.9' : '1.0', BAS_SPEC_MAX: outdoor ? '0.55' : '2.5' };
     }
     m.onBeforeCompile = (shader) => {
       const refl = this.reflection;
@@ -256,7 +262,7 @@ export class WorldMaterials {
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', usesRefl ? `#include <common>\n${REFLECT_PARS}` : '#include <common>')
         .replace('#include <lights_fragment_begin>', LIGHTS_BEGIN)
-        .replace('#include <lights_fragment_maps>', LIGHTS_MAPS.replace('__BAS_REFLECT_APPLY__', usesRefl ? REFLECT_APPLY : ''));
+        .replace('#include <lights_fragment_maps>', LIGHTS_MAPS.replace('__BAS_REFLECT_APPLY__', (reflective ? SPEC_CLAMP : '') + (usesRefl ? REFLECT_APPLY : '')));
       if (water) {
         shader.uniforms.basTime = time;
         shader.fragmentShader = shader.fragmentShader
@@ -264,7 +270,7 @@ export class WorldMaterials {
           .replace('#include <map_fragment>', WATER_MAP_FRAGMENT);
       }
     };
-    m.customProgramCacheKey = () => (water ? 'bas-world-water' : reflective && this.reflection ? 'bas-world-refl' : 'bas-world');
+    m.customProgramCacheKey = () => (water ? 'bas-world-water' : reflective ? (this.reflection ? 'bas-world-refl' : 'bas-world-gloss') : 'bas-world');
     if (this.lightMap) {
       m.lightMap = this.lightMap;
       m.lightMapIntensity = this.lightMapIntensity;

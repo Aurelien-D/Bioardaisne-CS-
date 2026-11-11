@@ -85,11 +85,20 @@ export async function buildMapModels(map: MapData, sampleLight: (pos: Vec3, out:
   const group = new THREE.Group();
   group.name = 'bas-models';
   const made: THREE.InstancedMesh[] = [];
+  // Instances under a roof never reach the sun's shadow map (saves most of the shadow pass):
+  // each asset is drawn as one indoor batch (no shadow casting) and one outdoor batch.
+  const roofed = (m: NonNullable<MapData['models']>[number]): boolean => {
+    for (const s of map.solids) {
+      if (s.min.y > m.pos.y + 1.2 && s.min.x <= m.pos.x && s.max.x >= m.pos.x && s.min.z <= m.pos.z && s.max.z >= m.pos.z) return true;
+    }
+    return false;
+  };
   const byAsset = new Map<string, NonNullable<MapData['models']>>();
   for (const m of map.models ?? []) {
-    const list = byAsset.get(m.asset) ?? [];
+    const key = `${m.asset}|${roofed(m) ? 'in' : 'out'}`;
+    const list = byAsset.get(key) ?? [];
     list.push(m);
-    byAsset.set(m.asset, list);
+    byAsset.set(key, list);
   }
   const inst = new THREE.Matrix4();
   const q = new THREE.Quaternion();
@@ -99,7 +108,8 @@ export async function buildMapModels(map: MapData, sampleLight: (pos: Vec3, out:
   const mat4 = new THREE.Matrix4();
   const color = new THREE.Color();
   await Promise.all(
-    [...byAsset].map(async ([asset, list]) => {
+    [...byAsset].map(async ([key, list]) => {
+      const [asset, where] = key.split('|') as [string, string];
       const tpl = await loadTemplate(asset);
       if (!tpl) return;
       tpl.traverse((o) => {
@@ -107,7 +117,7 @@ export async function buildMapModels(map: MapData, sampleLight: (pos: Vec3, out:
         if (!mesh.isMesh) return;
         for (const mm of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) patchMaterial(mm);
         const im = new THREE.InstancedMesh(mesh.geometry, mesh.material, list.length);
-        im.castShadow = true;
+        im.castShadow = where === 'out';
         im.receiveShadow = true;
         for (let i = 0; i < list.length; i++) {
           const m = list[i]!;

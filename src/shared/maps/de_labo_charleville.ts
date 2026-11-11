@@ -40,12 +40,12 @@ export function build(): MapData {
     ambientSky: 0xb9c8e6,
     ambientGround: 0x7a6a5a,
     ambientIntensity: 0.42,
-    fogColor: 0xe6c7a6,
-    fogNear: 45,
-    fogFar: 190,
+    fogColor: 0xcfae8e,
+    fogNear: 60,
+    fogFar: 230,
   });
 
-  const door = (at: number, width = 1.4, height = 2.2): Opening => ({ at, width, height, frame: 'metal_grey' });
+  const door = (at: number, width = 1.4, height = 2.2): Opening => ({ at, width, height, frame: 'metal_white' });
   /** Baie de vitrine (l'ancien magasin) : grand vitrage dans un cadre aluminium sombre. */
   const shop = (at: number, width: number, fill: 'glass' | 'frosted' = 'glass'): Opening => ({ at, width, height: 2.55, sill: 0.35, fill, frame: 'metal_dark' });
   const win = (at: number, width = 2, sill = 0.9, height = 1.5): Opening => ({ at, width, height, sill, fill: 'glass', frame: 'metal_white' });
@@ -200,7 +200,7 @@ export function build(): MapData {
   // Escaliers
   // =====================================================================================
   // Escalier principal du hall : volée droite montant vers -Z
-  stairs(b, { x: 32.25, y: 0.02, z: 29.4, dir: 2, width: 1.9, rise: F1 - 0.02, stepDepth: 0.33, mat: 'concrete', treadMat: 'tile_beige', right: 'rail' });
+  stairs(b, { x: 32.25, y: 0.02, z: 29.4, dir: 2, width: 1.9, rise: F1 - 0.02, stepDepth: 0.33, mat: 'plaster_white', treadMat: 'tile_white', right: 'rail' });
   railing(b, { x0: 33.35, z0: 24.1, x1: 33.35, z1: 29.6, y: F1, height: 1.05, style: 'glass' });
   railing(b, { x0: 31.25, z0: 29.65, x1: 33.4, z1: 29.65, y: F1, height: 1.05, style: 'glass' });
   // Escalier métallique extérieur : de la cour à la terrasse, le long de la façade arrière
@@ -224,11 +224,11 @@ export function build(): MapData {
   W1(18, 19, 31, 19, 'plaster_white', [door(3, 1.4), door(10, 1.4)]);
   W1(18, 22, 31, 22, 'plaster_white', [door(3.5, 1.4), door(9.5, 1.4)]);
   W1(24.5, 8, 24.5, 19, 'plaster_white', [door(5.5, 1.3)]);
-  W1(24.5, 22, 24.5, 33, 'plaster_blue', [door(5, 1.3)]);
+  W1(24.5, 22, 24.5, 33, 'plaster_white', [door(5, 1.3)]);
   W1(31, 17, 31, 33, 'plaster_white', [door(3.5, 2.4, 2.3)]);
   ceiling(b, { x0: 18, z0: 8, x1: 31, z1: 33, y: H1, thickness: 0.3, mat: 'ceiling_tile', otherMat: 'gravel' });
   ceiling(b, { x0: 31, z0: 17, x1: 36, z1: 33, y: H1, thickness: 0.3, mat: 'ceiling_tile', otherMat: 'gravel' });
-  floor(b, { x0: 18, z0: 19, x1: 31, z1: 22, y: F1 + 0.01, thickness: 0.02, mat: 'carpet_blue', solid: false });
+  floor(b, { x0: 18, z0: 19, x1: 31, z1: 22, y: F1 + 0.01, thickness: 0.02, mat: 'carpet_grey', solid: false });
   floor(b, { x0: 18, z0: 22, x1: 31, z1: 33, y: F1 + 0.01, thickness: 0.02, mat: 'carpet_grey', solid: false });
   // Terrasse (toit de la laverie) : garde-corps, ouverture face au palier de l'escalier extérieur
   railing(b, { x0: 3, z0: 8.05, x1: 10.4, z1: 8.05, y: F1, height: 1.05 });
@@ -257,6 +257,42 @@ export function build(): MapData {
   ceilingLights(b, { x0: 31.5, z0: 18, x1: 35.5, z1: 32 }, 5, H1);
   b.light(33.5, 3, 31.5, 0xfff0d0, 0.8, 8); // porche
 
+  // Ventilation : bouches de soufflage au plafond des locaux à faux plafond
+  const vents = (x0: number, z0: number, x1: number, z1: number, y: number, step = 4.5): void => {
+    const nx = Math.max(1, Math.round((x1 - x0) / step));
+    const nz = Math.max(1, Math.round((z1 - z0) / step));
+    for (let i = 0; i < nx; i++) {
+      for (let k = 0; k < nz; k++) {
+        const vx = x0 + ((i + 0.5) * (x1 - x0)) / nx + 1.1;
+        const vz = z0 + ((k + 0.5) * (z1 - z0)) / nz + 0.9;
+        if (vx > x1 - 0.4 || vz > z1 - 0.4) continue;
+        D(vx - 0.3, y - 0.025, vz - 0.3, vx + 0.3, y, vz + 0.3, 'metal_white');
+        D(vx - 0.22, y - 0.035, vz - 0.22, vx + 0.22, y - 0.025, vz + 0.22, 'metal_grey');
+      }
+    }
+  };
+  vents(19, 9, 30, 14, H0);
+  vents(19, 23, 30, 32, H0);
+  vents(19, 19.5, 30, 21.5, H0, 5.5);
+  vents(33.6, 18, 35.6, 29, H0, 5.5);
+  vents(19, 9, 30, 18, H1);
+  vents(19, 23, 30, 32, H1);
+  // Plateau technique (5 m sous plafond) : gaine de ventilation apparente, piquages et chemin de câbles
+  D(4.2, 4.25, 23.7, 17.4, 4.7, 24.3, 'metal_brushed');
+  for (const dx of [6, 9.5, 13, 16.2]) {
+    D(dx - 0.2, 3.95, 23.8, dx + 0.2, 4.25, 24.2, 'metal_brushed');
+    D(dx - 0.32, 3.9, 23.68, dx + 0.32, 3.95, 24.32, 'metal_white');
+    D(dx - 0.02, 4.7, 23.98, dx + 0.02, 5.0, 24.02, 'metal_dark'); // suspente
+  }
+  D(3.35, 3.6, 15.4, 3.65, 3.66, 32.8, 'metal_grey'); // chemin de câbles le long du pignon
+  D(3.35, 3.66, 15.4, 3.38, 3.74, 32.8, 'metal_grey');
+  D(3.62, 3.66, 15.4, 3.65, 3.74, 32.8, 'metal_grey');
+  for (let cz = 16.5; cz < 32.8; cz += 2.6) D(3.13, 3.5, cz - 0.03, 3.65, 3.6, cz + 0.03, 'metal_dark');
+  // Laverie / réserve : tuyauteries le long du mur du fond et descente vers l'évier
+  for (const [py, pm] of [[3.1, 'metal_red'], [3.25, 'metal_brushed'], [3.4, 'metal_blue']] as const) D(3.3, py, 8.2, 17.8, py + 0.07, 8.27, pm);
+  D(7.9, 1.2, 8.2, 7.97, 3.1, 8.27, 'metal_brushed');
+  D(8.1, 1.2, 8.2, 8.17, 3.4, 8.27, 'metal_blue');
+
   // =====================================================================================
   // Mobilier : plateau technique (site A)
   // =====================================================================================
@@ -266,44 +302,44 @@ export function build(): MapData {
   P('conveyor', 10.5, 19, 0);
   P('conveyor', 12.5, 19, 0);
   P('island_bench', 10.5, 28, 1);
-  P('lab_bench_shelf', 4, 18.5, 1, 0, 'back');
-  P('lab_bench', 4, 22, 1, 0, 'back');
-  P('lab_bench_sink', 4, 25, 1, 0, 'back');
-  P('lab_bench', 4, 29, 1, 0, 'back');
-  P('lab_fridge', 16.9, 16.2, 3, 0, 'back');
-  P('freezer', 16.9, 17.4, 3, 0, 'back');
+  P('lab_bench_shelf', 3.13, 18.5, 1, 0, 'back');
+  P('lab_bench', 3.13, 22, 1, 0, 'back');
+  P('lab_bench_sink', 3.13, 25, 1, 0, 'back');
+  P('lab_bench', 3.13, 29, 1, 0, 'back');
+  P('lab_fridge', 17.87, 16.2, 3, 0, 'back');
+  P('freezer', 17.87, 17.4, 3, 0, 'back');
   P('centrifuge_floor', 15.5, 23.5, 0);
-  P('fume_hood', 6.5, 32.2, 2, 0, 'back');
-  P('reagent_cabinet', 9.5, 32.3, 2, 0, 'back');
+  P('fume_hood', 6.5, 32.87, 2, 0, 'back');
+  P('reagent_cabinet', 9.5, 32.87, 2, 0, 'back');
   P('trolley', 13.5, 26, 1);
   P('clinical_waste_bin', 16.8, 30.8, 0);
-  P('analyser_bench', 4.45, 22, 1, 0.9);
-  P('microscope', 4.45, 28.6, 1, 0.9);
-  P('tube_rack', 4.45, 29.5, 1, 0.9);
-  P('centrifuge_bench', 4.45, 25.6, 1, 0.9);
+  P('analyser_bench', 3.58, 22, 1, 0.9);
+  P('microscope', 3.58, 28.6, 1, 0.9);
+  P('tube_rack', 3.58, 29.5, 1, 0.9);
+  P('centrifuge_bench', 3.58, 25.6, 1, 0.9);
   // Laverie / réserve
-  P('storage_shelf', 4, 9.6, 1, 0, 'back');
-  P('storage_shelf', 4, 11.2, 1, 0, 'back');
-  P('storage_shelf', 4, 12.8, 1, 0, 'back');
+  P('storage_shelf', 3.13, 9.6, 1, 0, 'back');
+  P('storage_shelf', 3.13, 11.2, 1, 0, 'back');
+  P('storage_shelf', 3.13, 12.8, 1, 0, 'back');
   P('pallet_loaded', 15.5, 10, 0);
   P('carton_stack', 14, 13.6, 0);
   P('crate_stack', 7, 13.9, 0);
   P('pallet_jack', 12.8, 12.2, 1);
   P('gas_cylinder', 17.3, 14.2, 0);
-  P('lab_bench_sink', 7.5, 8.7, 0, 0, 'back');
+  P('lab_bench_sink', 7.5, 8.13, 0, 0, 'back');
   // Bureaux des biologistes
   P('workstation', 21, 10, 0);
   P('workstation', 27.5, 10, 0);
   P('corner_desk', 29.5, 13.4, 3);
   P('office_chair', 28.6, 13.2, 1);
-  P('binder_shelf', 30.5, 9.5, 3, 0, 'back');
-  P('office_cupboard', 18.6, 13.5, 1, 0, 'back');
+  P('binder_shelf', 30.87, 9.5, 3, 0, 'back');
+  P('office_cupboard', 18.13, 13.5, 1, 0, 'back');
   P('photocopier', 23.2, 14.2, 2);
   P('plant_small', 30.2, 14.2, 0);
   // Tri
-  P('lab_bench', 20, 15.7, 0, 0, 'back');
-  P('label_printer', 19.6, 15.8, 0, 0.9);
-  P('tube_box', 20.5, 15.8, 0, 0.9);
+  P('lab_bench', 20, 15.13, 0, 0, 'back');
+  P('label_printer', 19.6, 15.35, 0, 0.9);
+  P('tube_box', 20.5, 15.35, 0, 0.9);
   P('transport_crate', 18.7, 18.2, 0);
   // Boxes de prélèvement
   for (const x of [23.5, 26.5, 29.5]) {
@@ -311,35 +347,35 @@ export function build(): MapData {
     P('sampling_trolley', x + 0.9, 16.4, 3);
     P('sharps_box', x + 0.9, 16.4, 0, 1.05);
   }
-  P('wall_cabinet', 23.5, 15.3, 0, 0, 'back');
-  P('wash_basin', 29.5, 15.3, 0, 0, 'back');
+  P('wall_cabinet', 23.5, 15.13, 0, 0, 'back');
+  P('wash_basin', 29.5, 15.13, 0, 0, 'back');
   // Couloir des prélèvements
   P('gel_stand', 21.2, 21.5, 0);
-  P('waiting_chairs_3', 26.5, 21.6, 2, 0, 'back');
+  P('waiting_chairs_3', 26.5, 21.87, 2, 0, 'back');
   // Accueil + attente
   P('reception_desk_l', 21, 25.5, 1);
   P('ticket_kiosk', 25.6, 31.4, 2);
-  P('waiting_chairs_4', 28.5, 22.6, 0, 0, 'back');
-  P('waiting_chairs_4', 30.3, 26.5, 3, 0, 'back');
+  P('waiting_chairs_4', 28.5, 22.13, 0, 0, 'back');
+  P('waiting_chairs_4', 30.87, 26.5, 3, 0, 'back');
   P('waiting_chairs_3', 27.5, 28.5, 0);
   P('coffee_table', 28, 25.8, 0);
-  P('water_dispenser', 30.4, 31.6, 3, 0, 'back');
-  P('magazine_rack', 30.5, 29.4, 3, 0, 'back');
+  P('water_dispenser', 30.87, 31.6, 3, 0, 'back');
+  P('magazine_rack', 30.87, 29.4, 3, 0, 'back');
   P('plant_large', 19, 32, 0);
   P('plant_small', 19, 23, 0);
-  P('call_screen', 24.5, 22.2, 0, 0, 'back');
+  P('call_screen', 24.5, 22.13, 0, 0, 'back');
   P('privacy_screen', 22.5, 29.2, 0);
   // Hall
   P('plant_large', 35.2, 29, 0);
-  P('fire_extinguisher', 35.8, 22, 3, 0, 'back');
+  P('fire_extinguisher', 35.87, 22, 3, 0, 'back');
   b.box(33.9, 0, 17.3, 35.7, 2.4, 17.5, 'metal_brushed', { detail: true, solid: false }); // ascenseur (décor)
   // Annexe
-  P('kitchen_counter', 41.5, 10, 3, 0, 'back');
-  P('kitchen_fridge', 41.5, 12, 3, 0, 'back');
+  P('kitchen_counter', 41.99, 10, 3, 0, 'back');
+  P('kitchen_fridge', 41.99, 12, 3, 0, 'back');
   P('meeting_table', 38.7, 12, 0);
-  P('lockers', 36.6, 14.5, 1, 0, 'back');
-  P('storage_shelf', 41.6, 18, 3, 0, 'back');
-  P('storage_shelf', 41.6, 20, 3, 0, 'back');
+  P('lockers', 36.13, 14.5, 1, 0, 'back');
+  P('storage_shelf', 41.99, 18, 3, 0, 'back');
+  P('storage_shelf', 41.99, 20, 3, 0, 'back');
   P('carton_stack', 40.5, 23.5, 0);
   P('pallet_loaded', 40.5, 27.5, 0);
   P('crate_stack', 37, 31.5, 0);
@@ -349,20 +385,76 @@ export function build(): MapData {
   P('desk', 20.5, 11, 0, F1);
   P('office_chair', 20.5, 10.1, 0, F1);
   P('computer_set', 20.5, 11.1, 2, F1 + 0.74);
-  P('office_cupboard', 24, 16.5, 3, F1, 'back');
+  P('office_cupboard', 24.37, 16.5, 3, F1, 'back');
   P('corner_desk', 28, 10.5, 0, F1);
   P('office_chair', 27.6, 9.6, 0, F1);
-  P('sofa', 29.5, 17.8, 2, F1, 'back');
-  P('binder_shelf', 25, 13, 1, F1, 'back');
+  P('sofa', 29.5, 18.87, 2, F1, 'back');
+  P('binder_shelf', 24.63, 10.2, 1, F1, 'back');
   P('workstation', 21, 27, 1, F1);
   P('desk', 21.5, 31.5, 2, F1);
   P('photocopier', 23.6, 23, 0, F1);
   P('meeting_table', 27.8, 28, 1, F1);
-  P('whiteboard', 30.8, 28, 3, F1, 'back');
+  P('whiteboard', 30.87, 28, 3, F1, 'back');
   P('plant_small', 25.2, 32.3, 0, F1);
-  P('kitchen_counter', 35.5, 19.5, 3, F1, 'back');
-  P('coffee_machine', 35.4, 19.5, 3, F1 + 0.9);
+  P('kitchen_counter', 35.87, 19.5, 3, F1, 'back');
+  P('coffee_machine', 35.6, 19.5, 3, F1 + 0.9);
   P('plant_large', 35, 31.8, 0, F1);
+
+  // Compléments de mobilier : bureaux du rez-de-chaussée
+  P('workstation', 24.3, 12.9, 2);
+  P('office_cupboard', 18.13, 10.4, 1, 0, 'back');
+  P('office_cupboard', 18.13, 9.3, 1, 0, 'back');
+  P('radiator', 20.5, 8.13, 0, 0, 'back');
+  P('radiator', 28, 8.13, 0, 0, 'back');
+  P('notice_board', 26, 14.87, 2, 0, 'back');
+  P('wall_clock', 24.5, 8.13, 0, 0, 'back');
+  P('coat_rack', 19, 14.3, 2);
+  P('drawer_unit', 22.1, 10.1, 0);
+  P('drawer_unit', 28.6, 10.1, 0);
+  // Couloir, accueil, hall
+  P('notice_board', 20, 21.87, 2, 0, 'back');
+  P('wall_clock', 21, 22.13, 0, 0, 'back');
+  P('plant_large', 30.3, 23, 0);
+  P('waiting_chairs_3', 35.87, 23.5, 3, 0, 'back');
+  P('notice_board', 35.87, 26.5, 3, 0, 'back');
+  P('plant_large', 35.2, 18.4, 0);
+  // Annexe : salle de repos et réserves
+  P('coffee_machine', 41.72, 9.5, 3, 0.9);
+  P('microwave', 41.72, 10.5, 3, 0.9);
+  P('sofa', 36.13, 10.6, 1, 0, 'back');
+  P('plant_small', 36.6, 8.6, 0);
+  P('wall_clock', 37.5, 8.13, 0, 0, 'back');
+  P('notice_board', 37.2, 15.87, 2, 0, 'back');
+  P('storage_shelf', 36.13, 22.3, 1, 0, 'back');
+  P('storage_shelf', 36.13, 23.7, 1, 0, 'back');
+  P('storage_shelf', 41.99, 22, 3, 0, 'back');
+  P('storage_shelf', 41.99, 27, 3, 0, 'back');
+  P('storage_shelf', 41.99, 28.4, 3, 0, 'back');
+  P('pallet_jack', 38.2, 28.9, 2);
+  P('carton_stack', 36.8, 26, 0);
+  // Étage : bureaux nord
+  P('workstation', 22, 16.2, 2, F1);
+  P('office_cupboard', 18.13, 14, 1, F1, 'back');
+  P('radiator', 21, 8.13, 0, F1, 'back');
+  P('radiator', 27.5, 8.13, 0, F1, 'back');
+  P('plant_large', 30.2, 9, 0, F1);
+  P('whiteboard', 26.6, 18.87, 2, F1, 'back');
+  P('coffee_table', 29.5, 17.2, 0, F1);
+  P('visitor_chair', 28.2, 12.3, 2, F1);
+  P('drawer_unit', 21.6, 11.1, 0, F1);
+  // Étage : couloir, secrétariat, salle de réunion
+  P('plant_small', 30.4, 20.5, 0, F1);
+  P('notice_board', 21.5, 19.13, 0, F1, 'back');
+  P('fire_extinguisher', 26, 21.87, 2, F1, 'back');
+  P('office_cupboard', 18.13, 30, 1, F1, 'back');
+  P('office_cupboard', 18.13, 31.1, 1, F1, 'back');
+  P('plant_small', 18.6, 22.7, 0, F1);
+  P('office_chair', 21.5, 30.6, 0, F1);
+  P('computer_set', 21.5, 31.4, 0, F1 + 0.74);
+  P('radiator', 21, 32.87, 2, F1, 'back');
+  P('radiator', 27.5, 32.87, 2, F1, 'back');
+  P('office_cupboard', 24.63, 31.3, 1, F1, 'back');
+  P('wall_clock', 27.8, 22.13, 0, F1, 'back');
 
   // =====================================================================================
   // Extérieur : cour arrière, passage, rue
@@ -448,17 +540,17 @@ export function build(): MapData {
   b.sign({ x: 3.14, y: 2.2, z: 24, facing: 1, w: 1.4, h: 1, text: 'Automate en calibration', sub: 'Ne pas déranger (lui non plus)', style: 'poster' });
   b.sign({ x: 12, y: 3.6, z: 32.86, facing: 2, w: 1.6, h: 1, text: 'Contrôle qualité', sub: 'Passé ce matin. Promis.', style: 'poster' });
   b.sign({ x: 39, y: 2.2, z: 8.14, facing: 0, w: 1.6, h: 0.4, text: 'Salle de repos', style: 'door' });
-  b.sign({ x: 41.86, y: 1.7, z: 14, facing: 3, w: 1.2, h: 0.9, text: 'Frigo', sub: 'Yaourts ≠ échantillons', style: 'poster' });
+  b.sign({ x: 41.99, y: 1.7, z: 14, facing: 3, w: 1.2, h: 0.9, text: 'Frigo', sub: 'Yaourts ≠ échantillons', style: 'poster' });
   b.sign({ x: 39, y: 2.2, z: 32.86, facing: 2, w: 1.6, h: 0.4, text: 'Dépôt des échantillons', style: 'door' });
   b.sign({ x: 34.8, y: 1.6, z: 17.52, facing: 0, w: 1.2, h: 0.5, text: 'Ascenseur en panne', sub: 'Depuis l’audit précédent', style: 'poster' });
-  b.sign({ x: 24.5, y: F1 + 2.4, z: 22.14, facing: 0, w: 1.6, h: 0.35, text: 'Secrétariat', style: 'door' });
+  b.sign({ x: 21.5, y: F1 + 2.45, z: 21.86, facing: 2, w: 1.6, h: 0.35, text: 'Secrétariat', style: 'door' });
   b.sign({ x: 27.9, y: F1 + 2.4, z: 22.14, facing: 0, w: 1.9, h: 0.35, text: 'Salle de réunion', style: 'door' });
   b.sign({ x: 21, y: F1 + 2.4, z: 18.86, facing: 2, w: 1.6, h: 0.35, text: 'Direction', style: 'door' });
   b.sign({ x: 28, y: F1 + 2.4, z: 18.86, facing: 2, w: 1.6, h: 0.35, text: 'Biologistes', style: 'door' });
   b.sign({ x: 30.86, y: F1 + 1.7, z: 24, facing: 3, w: 1.3, h: 0.9, text: 'Revue de direction', sub: 'Ordre du jour : qui a fini le café ?', style: 'poster' });
   b.sign({ x: 18.14, y: F1 + 2.4, z: 11.5, facing: 1, w: 1.4, h: 0.35, text: 'Terrasse', style: 'door', icon: 'exit' });
-  b.sign({ x: 22, y: 3, z: 0.14, facing: 0, w: 3, h: 0.5, text: 'COURS ARISTIDE BRIAND', sub: 'Accès livraisons', style: 'street' });
-  b.sign({ x: 12, y: 3.2, z: 39.86, facing: 2, w: 3, h: 0.5, text: 'COURS ARISTIDE BRIAND', style: 'street' });
+  b.sign({ x: 22, y: 3, z: 0.01, facing: 0, w: 3, h: 0.5, text: 'COURS ARISTIDE BRIAND', sub: 'Accès livraisons', style: 'street' });
+  b.sign({ x: 13, y: 3.5, z: 39.99, facing: 2, w: 3, h: 0.5, text: 'COURS ARISTIDE BRIAND', style: 'street' });
   b.sign({ x: 28.5, y: 1.7, z: 34.28, facing: 0, w: 1.6, h: 0.9, text: 'Ligne 4', sub: 'Gare · Place Ducale · Cours Briand', style: 'screen', lit: true });
 
   // =====================================================================================

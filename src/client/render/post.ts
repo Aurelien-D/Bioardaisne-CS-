@@ -41,7 +41,7 @@ const ShaftsShader = {
       float acc = 0.0;
       for (int i = 0; i < SHAFT_STEPS; i++) {
         vec3 c = texture2D(tDiffuse, clamp(uv, 0.001, 0.999)).rgb;
-        acc += min(max(dot(c, vec3(0.2126, 0.7152, 0.0722)) - 1.6, 0.0), 2.5) * w;
+        acc += min(max(dot(c, vec3(0.2126, 0.7152, 0.0722)) - 1.8, 0.0), 1.6) * w;
         w *= 0.965;
         uv += stepv;
       }
