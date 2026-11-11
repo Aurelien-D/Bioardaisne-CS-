@@ -87,6 +87,8 @@ export interface IViewModel {
   onDraw(duration: number): void;
   /** Cancel a reload animation (weapon switch). */
   cancelReload(): void;
+  /** Play the weapon inspection animation (the player looks the weapon over). Firing, reloading or switching cancels it. */
+  onInspect?(): void;
   update(frame: ViewModelFrame): void;
   /** Muzzle position in viewCamera space (to start the local player's tracers). */
   getMuzzle(out: THREE.Vector3): THREE.Vector3;
@@ -104,6 +106,9 @@ export interface AvatarFrame {
   crouch: number;
   /** Horizontal speed (m/s). */
   speed: number;
+  /** Horizontal velocity (m/s, world axes): lets the legs strafe or backpedal instead of always running forward. */
+  velX?: number;
+  velZ?: number;
   onGround: boolean;
   weapon: WeaponId;
   reloading: boolean;
@@ -120,6 +125,8 @@ export interface IAvatar {
   update(frame: AvatarFrame): void;
   /** Weapon fire animation (recoil of the arms). */
   onFire(): void;
+  /** A bullet hit this player (it survives): flinch away from `dir`, the direction the bullet travelled. */
+  onHit?(dir: Vec3): void;
   /** Play the death animation; `impulse` = direction of the killing shot. The corpse stays until dispose(). */
   die(impulse: Vec3): void;
   /** World position of the weapon muzzle (to start tracers / muzzle flashes). */

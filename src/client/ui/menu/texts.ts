@@ -110,7 +110,7 @@ export const TEAM_ROLES: Record<GameModeId, Record<0 | 1, { tag: string; goal: s
 /** Groups of the key binding list (options and cheat-sheet). */
 export const KEY_GROUPS: { title: string; actions: KeyAction[] }[] = [
   { title: 'Déplacement', actions: ['forward', 'back', 'left', 'right', 'jump', 'crouch', 'walk'] },
-  { title: 'Combat', actions: ['fire', 'altFire', 'reload', 'use'] },
+  { title: 'Combat', actions: ['fire', 'altFire', 'reload', 'inspect', 'use'] },
   { title: 'Armes', actions: ['slot1', 'slot2', 'slot3', 'lastWeapon'] },
   { title: 'Interface', actions: ['scoreboard', 'chat', 'teamChat', 'loadout', 'teamMenu'] },
 ];

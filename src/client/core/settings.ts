@@ -14,6 +14,7 @@ export type KeyAction =
   | 'fire'
   | 'altFire'
   | 'reload'
+  | 'inspect'
   | 'use'
   | 'slot1'
   | 'slot2'
@@ -80,6 +81,7 @@ export const DEFAULT_KEYS: Record<KeyAction, string[]> = {
   fire: ['Mouse0'],
   altFire: ['Mouse2'],
   reload: ['KeyR'],
+  inspect: ['KeyF'],
   use: ['KeyE'],
   slot1: ['Digit1'],
   slot2: ['Digit2'],
@@ -103,6 +105,7 @@ export const KEY_ACTION_LABELS: Record<KeyAction, string> = {
   fire: 'Tirer',
   altFire: 'Viser / lunette',
   reload: 'Recharger',
+  inspect: 'Inspecter l’arme',
   use: 'Utiliser / objectif',
   slot1: 'Arme principale',
   slot2: 'Arme de poing',

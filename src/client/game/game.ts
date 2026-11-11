@@ -53,6 +53,8 @@ interface Remote {
   pitch: number;
   weapon: WeaponId;
   speed: number;
+  velX: number;
+  velZ: number;
   stride: number;
   seen: number;
   corpse: IAvatar | null;
@@ -504,6 +506,8 @@ export class Game {
           pitch: t[5],
           weapon: weaponFromIndex(t[8]),
           speed: 0,
+          velX: 0,
+          velZ: 0,
           stride: 0,
           seen: 0,
           corpse: null,
@@ -584,10 +588,17 @@ export class Game {
         }
         break;
       }
-      case 'hit':
+      case 'hit': {
+        // The victim flinches away from the shooter (this client).
+        const victim = this.remotes.get(e.victim);
+        if (victim?.avatar?.onHit && !e.kill) {
+          const cam = this.engine.camera.position;
+          victim.avatar.onHit({ x: victim.pos.x - cam.x, y: 0, z: victim.pos.z - cam.z });
+        }
         this.hud.hitMarker(e.hg === 1, e.kill);
         this.audio.feedback(e.kill ? 'kill' : e.hg === 1 ? 'headshot' : 'hitmarker');
         break;
+      }
       case 'hurt': {
         const cam = this.engine.camera.position;
         const a = anglesFromDir({ x: e.from[0] - cam.x, y: 0, z: e.from[2] - cam.z });
@@ -713,6 +724,9 @@ export class Game {
           break;
         case 'teamChat':
           this.hud.openChat(true);
+          break;
+        case 'inspect':
+          if (this.me && this.mode === 'playing') this.viewmodel.onInspect?.();
           break;
         case 'loadout':
           if (document.pointerLockElement) document.exitPointerLock();
@@ -1008,6 +1022,11 @@ export class Game {
       r.weapon = weaponFromIndex(c.w);
       const sp = dt > 0 ? Math.hypot(r.pos.x - px, r.pos.z - pz) / dt : 0;
       r.speed += (Math.min(sp, 9) - r.speed) * Math.min(1, dt * 10);
+      if (dt > 0) {
+        const k = Math.min(1, dt * 10);
+        r.velX += (clamp((r.pos.x - px) / dt, -9, 9) - r.velX) * k;
+        r.velZ += (clamp((r.pos.z - pz) / dt, -9, 9) - r.velZ) * k;
+      }
       const ground = (c.flags & PFLAG.OnGround) !== 0;
       this.engine.sampleLight(r.pos, this.tmpC);
       r.avatar.update({
@@ -1017,6 +1036,8 @@ export class Game {
         pitch: r.pitch,
         crouch: a.crouch + (c.crouch - a.crouch) * Math.min(1, f),
         speed: r.speed,
+        velX: r.velX,
+        velZ: r.velZ,
         onGround: ground,
         weapon: r.weapon,
         reloading: (c.flags & PFLAG.Reloading) !== 0,
