@@ -5,6 +5,7 @@
 import type { MapData, MapMeta } from './types';
 import * as devKit from './dev_kit';
 import * as devTest from './dev_test';
+import * as laboCharleville from './de_labo_charleville';
 
 export interface MapModule {
   meta: MapMeta;
@@ -12,7 +13,7 @@ export interface MapModule {
 }
 
 /** Order = order in the map picker. Maps whose id starts with "dev_" are hidden from the menu. */
-export const MAP_MODULES: MapModule[] = [devTest, devKit];
+export const MAP_MODULES: MapModule[] = [laboCharleville, devTest, devKit];
 
 const cache = new Map<string, MapData>();
 

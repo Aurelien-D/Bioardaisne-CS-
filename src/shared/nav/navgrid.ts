@@ -66,7 +66,11 @@ export class NavGrid {
     nav.nz = Math.ceil((b.max.z - nav.z0) / cell) + 1;
     nav.colHead = new Int32Array(nav.nx * nav.nz).fill(-1);
 
-    const half = { x: PLAYER_HALF_WIDTH, y: PLAYER_HEIGHT / 2, z: PLAYER_HALF_WIDTH };
+    // Standing room is tested above knee height: anything lower than STEP_HEIGHT can be
+    // stepped over, which is what makes staircases walkable for a 0.7 m wide hull.
+    const half = { x: PLAYER_HALF_WIDTH, y: (PLAYER_HEIGHT - STEP_HEIGHT) / 2, z: PLAYER_HALF_WIDTH };
+    const RAISE = STEP_HEIGHT + LIFT + half.y;
+    const tiny = { x: 0.04, y: 0.04, z: 0.04 };
     const c = { x: 0, y: 0, z: 0 };
     // 1. Nodes: tops of solids where a standing hull fits.
     for (const s of world.solids) {
@@ -92,7 +96,9 @@ export class NavGrid {
           if (dup) continue;
           c.x = nav.x0 + ix * cell;
           c.z = nav.z0 + iz * cell;
-          c.y = top + LIFT + half.y;
+          c.y = top + 0.06;
+          if (world.boxOverlaps(c, tiny)) continue; // buried under another solid
+          c.y = top + RAISE;
           if (world.boxOverlaps(c, half)) continue;
           const id = nav.px.length;
           nav.px.push(c.x);
@@ -129,7 +135,7 @@ export class NavGrid {
         // The hull must be able to slide horizontally at the higher of the two floors…
         c.x = nav.px[n]!;
         c.z = nav.pz[n]!;
-        c.y = Math.max(y, nav.py[best]!) + LIFT + half.y;
+        c.y = Math.max(y, nav.py[best]!) + RAISE;
         if (dy > 0.01 && world.boxOverlaps(c, half)) continue; // no headroom to step up
         delta.x = DX[d]! * cell;
         delta.z = DZ[d]! * cell;

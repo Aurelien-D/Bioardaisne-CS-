@@ -5,12 +5,12 @@ import type { IViewModel, ViewModelFrame } from '../../core/contracts';
 import { createWeaponModel, type WeaponModel } from '../weapons/models';
 
 const HIP: Record<string, [number, number, number]> = {
-  melee: [0.2, -0.2, -0.5],
-  pistol: [0.17, -0.17, -0.55],
-  smg: [0.18, -0.19, -0.5],
-  rifle: [0.18, -0.2, -0.47],
-  shotgun: [0.18, -0.2, -0.48],
-  sniper: [0.18, -0.2, -0.45],
+  melee: [0.17, -0.17, -0.4],
+  pistol: [0.14, -0.14, -0.42],
+  smg: [0.15, -0.16, -0.36],
+  rifle: [0.15, -0.165, -0.34],
+  shotgun: [0.15, -0.165, -0.35],
+  sniper: [0.15, -0.165, -0.33],
 };
 
 class ViewModel implements IViewModel {
@@ -46,6 +46,7 @@ class ViewModel implements IViewModel {
 
   constructor() {
     this.root.add(this.holder);
+    this.holder.scale.setScalar(0.8);
     this.armR = this.makeArm();
     this.armL = this.makeArm();
     this.holder.add(this.armR, this.armL);
