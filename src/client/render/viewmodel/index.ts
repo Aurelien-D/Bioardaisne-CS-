@@ -178,14 +178,16 @@ class ViewModel implements IViewModel {
     this.t += dt;
     const cat = this.id ? WEAPONS[this.id].category : 'rifle';
     const hip = HIP[cat] ?? HIP.rifle!;
-    this.root.visible = f.zoom === 0 && this.id !== null;
+    this.root.visible = this.id !== null && (f.zoom === 0 || cat !== 'sniper');
+    const ads = cat === 'sniper' || cat === 'melee' ? 0 : f.ads;
 
     // Bob
     const moving = f.onGround ? Math.min(1, f.speed / 5.5) : 0;
     this.bobAmp += (moving - this.bobAmp) * Math.min(1, dt * 8);
     this.bob += dt * (4 + f.speed * 1.75);
-    const bx = Math.cos(this.bob) * 0.012 * this.bobAmp;
-    const by = -Math.abs(Math.sin(this.bob)) * 0.014 * this.bobAmp;
+    const steady = 1 - ads * 0.85;
+    const bx = Math.cos(this.bob) * 0.012 * this.bobAmp * steady;
+    const by = -Math.abs(Math.sin(this.bob)) * 0.014 * this.bobAmp * steady;
     // Landing dip
     if (f.onGround && !this.wasGround) this.landDip = 1;
     this.wasGround = f.onGround;
@@ -258,6 +260,20 @@ class ViewModel implements IViewModel {
       z -= s * 0.12;
       ry += s * 0.9 * this.slashSide;
       rz += s * 0.6 * this.slashSide;
+    }
+    // Aim down sights: bring the sight line onto the screen centre.
+    if (ads > 0 && this.model) {
+      const sg = this.model.sight.position;
+      const k = ads * ads * (3 - 2 * ads);
+      const ax = -sg.x * 0.8;
+      const ay = -sg.y * 0.8 - this.kickRot * 0.004;
+      const az = -0.2 - sg.z * 0.8 + this.kick * 0.03;
+      x += (ax - x) * k;
+      y += (ay - y) * k;
+      z += (az - z) * k;
+      rx *= 1 - k * 0.8;
+      ry *= 1 - k * 0.9;
+      rz *= 1 - k * 0.9;
     }
     this.holder.position.set(x, y, z);
     this.holder.rotation.set(rx, ry, rz);

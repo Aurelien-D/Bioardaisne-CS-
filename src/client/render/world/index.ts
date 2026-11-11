@@ -197,8 +197,11 @@ export class WorldBuilder {
       const material = materials.get(mat);
       for (const set of sets) {
         const geometry = writersToGeometry(set);
+        geometry.computeVertexNormals();
         const mesh = new THREE.Mesh(geometry, material);
         mesh.name = `world:${mat}`;
+        mesh.receiveShadow = true;
+        mesh.castShadow = !material.transparent;
         mesh.matrixAutoUpdate = false;
         mesh.updateMatrix();
         group.add(mesh);

@@ -14,6 +14,8 @@
  * sun direction — and are expected to multiply their colours by `sampleLight(pos)`, which
  * carries the local light colour and level (light probes, dark in dark corridors).
  */
+import { createEnvironment } from './env';
+import { createPost, type Post } from './post';
 import * as THREE from 'three';
 import { DEFAULT_ENV } from '../../shared/maps/builder';
 import type { EnvDef, MapData } from '../../shared/maps/types';
@@ -76,6 +78,8 @@ class Engine implements IEngine {
   /** Incremented by every loadMap / unloadMap: a stale asynchronous load notices and stops. */
   private loadToken = 0;
   private sizeDirty = true;
+  private post: Post | null = null;
+  private envMap: THREE.Texture | null = null;
   private width = 0;
   private height = 0;
   private disposed = false;
@@ -94,6 +98,10 @@ class Engine implements IEngine {
       stencil: false,
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.86;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.autoClear = false;
     this.renderer.info.autoReset = false; // one frame = two render() calls: reset manually
     this.renderer.setClearColor(DEFAULT_ENV.skyHorizon, 1);
@@ -109,6 +117,11 @@ class Engine implements IEngine {
     hemi.name = 'bas-hemi';
     this.sun = new THREE.DirectionalLight(0xffffff, RIG_SUN);
     this.sun.name = 'bas-sun';
+    this.sun.castShadow = true;
+    const shadowSize = this.quality === 'high' ? 4096 : this.quality === 'medium' ? 2048 : 1024;
+    this.sun.shadow.mapSize.set(shadowSize, shadowSize);
+    this.sun.shadow.bias = -0.0006;
+    this.sun.shadow.normalBias = 0.03;
     this.scene.add(hemi, this.sun, this.sun.target);
     const viewHemi = hemi.clone();
     this.viewSun = new THREE.DirectionalLight(0xffffff, RIG_SUN);
@@ -170,8 +183,9 @@ class Engine implements IEngine {
       let baked: BakeResult | null = null;
       let bakeFailed = false;
       try {
+        // The sun is a real-time light (dynamic shadows): bake lamps, sky and bounce only.
         baked = await bakeLightmapAsync(
-          map,
+          { ...map, env: { ...map.env, sunIntensity: 0 } },
           world ?? null,
           { quality: this.quality, maxAtlasSize: this.renderer.capabilities.maxTextureSize },
           (fraction) => onProgress?.(0.04 + fraction * 0.5, LIGHT_LABEL),
@@ -230,6 +244,7 @@ class Engine implements IEngine {
       committed = true;
       this.scene.add(builtWorld.group, builtSigns.group);
       this.applyEnv(map.env);
+      this.fitShadow(map);
 
       // Compile the shaders and upload the textures now rather than on the first frame.
       onProgress?.(0.95, 'Derniers contrôles qualité…');
@@ -270,6 +285,34 @@ class Engine implements IEngine {
     this.sunDir.normalize();
     this.sun.position.copy(this.sunDir).multiplyScalar(50);
     this.sun.target.position.set(0, 0, 0);
+    // Real-time sun: colour and strength of the map (interior-only maps have none).
+    this.sun.color.set(env.sunColor);
+    this.sun.intensity = env.sunIntensity > 0 ? Math.PI * 1.55 * env.sunIntensity : 0;
+    this.viewSun.color.set(env.sunIntensity > 0 ? env.sunColor : 0xffffff);
+    // Reflection environment shared by the world, the avatars' weapons and the view model.
+    this.envMap?.dispose();
+    this.envMap = createEnvironment(this.renderer, env);
+    this.scene.environment = this.envMap;
+    this.viewScene.environment = this.envMap;
+    this.viewScene.environmentIntensity = 1.25;
+  }
+
+  /** Fit the sun's shadow frustum around the whole map. */
+  private fitShadow(map: MapData): void {
+    const b = map.bounds;
+    const cx = (b.min.x + b.max.x) / 2;
+    const cy = (b.min.y + b.max.y) / 2;
+    const cz = (b.min.z + b.max.z) / 2;
+    const r = Math.hypot(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) / 2 + 2;
+    this.sun.target.position.set(cx, cy, cz);
+    this.sun.position.set(cx + this.sunDir.x * (r + 20), cy + this.sunDir.y * (r + 20), cz + this.sunDir.z * (r + 20));
+    const cam = this.sun.shadow.camera;
+    cam.left = cam.bottom = -r;
+    cam.right = cam.top = r;
+    cam.near = 1;
+    cam.far = 2 * r + 40;
+    cam.updateProjectionMatrix();
+    this.sun.target.updateMatrixWorld();
   }
 
   private warmUp(): void {
@@ -324,6 +367,7 @@ class Engine implements IEngine {
     this.height = h;
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(w, h, false);
+    this.post?.setSize(w, h, ratio);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.viewCamera.aspect = w / h;
@@ -341,6 +385,17 @@ class Engine implements IEngine {
 
     const renderer = this.renderer;
     renderer.info.reset();
+    this.tmpQuat.copy(this.camera.quaternion).invert();
+    this.viewSun.position.copy(this.sunDir).applyQuaternion(this.tmpQuat).multiplyScalar(5);
+    if (this.quality !== 'low') {
+      // Filmic pipeline: HDR + bloom + tone mapping + grade.
+      if (!this.post) {
+        this.post = createPost(renderer, this.scene, this.camera, this.viewScene, this.viewCamera, this.quality);
+        this.post.setSize(this.width, this.height, renderer.getPixelRatio());
+      }
+      this.post.render(time);
+      return;
+    }
     renderer.clear();
     renderer.render(this.scene, this.camera);
 
@@ -361,6 +416,8 @@ class Engine implements IEngine {
     this.disposed = true;
     this.resizeObserver?.disconnect();
     this.sky.dispose();
+    this.post?.dispose();
+    this.envMap?.dispose();
     disposeMaterialTextures();
     this.renderer.dispose();
   }

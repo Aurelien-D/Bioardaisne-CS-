@@ -77,6 +77,8 @@ class Avatar implements IAvatar {
       this.geos.push(g);
       const mesh = new THREE.Mesh(g, mat);
       mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       parent.add(mesh);
       return mesh;
     };

@@ -171,7 +171,7 @@ export function createReticle(): Reticle {
 
     update(f, now) {
       // Crosshair: hidden when dead or looking through the scope.
-      const show = f.alive && f.zoom <= 0;
+      const show = f.alive && f.zoom <= 0 && !f.ads;
       if (show !== shown) {
         shown = show;
         xhair.hidden = !show;

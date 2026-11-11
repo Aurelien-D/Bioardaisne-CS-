@@ -1,6 +1,8 @@
 /**
- * World materials: one unlit THREE.MeshBasicMaterial per MaterialId
- * (texture × vertex colour, where the vertex colour carries tint × baked light).
+ * World materials: one physically based THREE.MeshStandardMaterial per MaterialId.
+ * Diffuse light is baked (lightmap for box faces, vertex colours for the rest); on top
+ * of it the material receives the real-time sun (with shadows), a normal map derived
+ * from the albedo texture, and environment reflections scaled by roughness / metalness.
  *
  *  - opaque materials: plain basic material;
  *  - transparent materials (MATERIALS[id].transparent): alpha blending, no depth write;
@@ -22,6 +24,103 @@ const OPACITY: Partial<Record<MaterialId, number>> = {
   water: 0.82,
 };
 const DEFAULT_OPACITY = 0.5;
+
+/** Roughness / metalness / relief strength per surface type. */
+const SURFACE_PBR: Record<string, [rough: number, metal: number, bump: number]> = {
+  concrete: [0.9, 0, 1.2],
+  tile: [0.22, 0, 0.9],
+  lino: [0.38, 0, 0.35],
+  carpet: [1, 0, 0.9],
+  wood: [0.55, 0, 0.7],
+  metal: [0.38, 0.85, 0.5],
+  glass: [0.06, 0, 0.1],
+  plaster: [0.92, 0, 0.5],
+  plastic: [0.42, 0, 0.3],
+  fabric: [1, 0, 0.9],
+  cardboard: [0.95, 0, 0.8],
+  dirt: [1, 0, 1.4],
+  grass: [1, 0, 1.4],
+  gravel: [1, 0, 1.6],
+  water: [0.05, 0, 0.3],
+  foliage: [0.9, 0, 1.2],
+};
+const PBR_OVERRIDE: Partial<Record<MaterialId, [number, number, number]>> = {
+  laminate_white: [0.3, 0, 0.2],
+  laminate_grey: [0.35, 0, 0.2],
+  metal_white: [0.35, 0.25, 0.2],
+  metal_brushed: [0.3, 1, 0.5],
+  asphalt: [0.85, 0, 1.6],
+  cobble: [0.8, 0, 2.2],
+  brick_red: [0.9, 0, 2.2],
+  brick_brown: [0.9, 0, 2.2],
+  ceiling_tile: [0.95, 0, 0.8],
+  wall_lab_panel: [0.45, 0, 0.5],
+  window_facade: [0.15, 0.2, 0.6],
+  shopfront: [0.1, 0.3, 0.3],
+};
+
+/** World shaders: no hemisphere / diffuse IBL (ambient is baked), reflections dimmed where the baked light is dark. */
+const LIGHTS_BEGIN = THREE.ShaderChunk.lights_fragment_begin.replace(
+  'irradiance += getHemisphereLightIrradiance( hemisphereLights[ i ], geometryNormal );',
+  '',
+);
+const LIGHTS_MAPS = THREE.ShaderChunk.lights_fragment_maps
+  .replace('iblIrradiance += getIBLIrradiance( geometryNormal );', '')
+  .replace(
+    'radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );',
+    `radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );
+	#ifdef USE_LIGHTMAP
+		radiance *= clamp( dot( lightMapTexel.rgb, vec3( 0.3333 ) ) * lightMapIntensity * 0.42, 0.04, 1.0 );
+	#endif`,
+  );
+
+const normalCache = new Map<string, THREE.CanvasTexture>();
+
+/** Tangent-space normal map derived from the luminance of an albedo canvas (Sobel filter). */
+function normalMapFor(id: MaterialId, quality: Quality, albedo: THREE.Texture, strength: number): THREE.Texture | null {
+  const key = `${id}|${quality}`;
+  const hit = normalCache.get(key);
+  if (hit) return hit;
+  const src = albedo.image as HTMLCanvasElement | undefined;
+  if (!src || typeof src.getContext !== 'function' || strength <= 0) return null;
+  const w = src.width;
+  const h = src.height;
+  const ctx = src.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const px = ctx.getImageData(0, 0, w, h).data;
+  const lum = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) lum[i] = (px[i * 4]! * 0.3 + px[i * 4 + 1]! * 0.59 + px[i * 4 + 2]! * 0.11) / 255;
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const octx = out.getContext('2d')!;
+  const img = octx.createImageData(w, h);
+  const k = strength * 2.2;
+  for (let y = 0; y < h; y++) {
+    const ym = ((y - 1 + h) % h) * w;
+    const yp = ((y + 1) % h) * w;
+    const y0 = y * w;
+    for (let x = 0; x < w; x++) {
+      const xm = (x - 1 + w) % w;
+      const xp = (x + 1) % w;
+      const dx = (lum[ym + xp]! + 2 * lum[y0 + xp]! + lum[yp + xp]! - lum[ym + xm]! - 2 * lum[y0 + xm]! - lum[yp + xm]!) * k;
+      const dy = (lum[yp + xm]! + 2 * lum[yp + x]! + lum[yp + xp]! - lum[ym + xm]! - 2 * lum[ym + x]! - lum[ym + xp]!) * k;
+      const inv = 1 / Math.sqrt(dx * dx + dy * dy + 1);
+      const o = (y0 + x) * 4;
+      img.data[o] = (-dx * inv * 0.5 + 0.5) * 255;
+      img.data[o + 1] = (dy * inv * 0.5 + 0.5) * 255;
+      img.data[o + 2] = (inv * 0.5 + 0.5) * 255;
+      img.data[o + 3] = 255;
+    }
+  }
+  octx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(out);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = albedo.anisotropy;
+  tex.needsUpdate = true;
+  normalCache.set(key, tex);
+  return tex;
+}
 
 const WATER_MAP_FRAGMENT = /* glsl */ `
 #ifdef USE_MAP
@@ -46,7 +145,7 @@ const WATER_MAP_FRAGMENT = /* glsl */ `
 `;
 
 export class WorldMaterials {
-  private readonly materials = new Map<MaterialId, THREE.MeshBasicMaterial>();
+  private readonly materials = new Map<MaterialId, THREE.MeshStandardMaterial>();
   private readonly time = { value: 0 };
   private quality: Quality;
   private lightMap: THREE.Texture | null = null;
@@ -57,21 +156,46 @@ export class WorldMaterials {
   }
 
   /** Material for a MaterialId (created on first use). */
-  get(id: MaterialId): THREE.MeshBasicMaterial {
+  get(id: MaterialId): THREE.MeshStandardMaterial {
     let m = this.materials.get(id);
     if (m) return m;
     const info = materialInfo(id);
-    m = new THREE.MeshBasicMaterial({
-      map: getMaterialTexture(id, this.quality),
-      vertexColors: true,
-    });
+    const map = getMaterialTexture(id, this.quality);
+    const [rough, metal, bump] = PBR_OVERRIDE[id] ?? SURFACE_PBR[info.surf] ?? [0.8, 0, 0.5];
+    m = new THREE.MeshStandardMaterial({ map, vertexColors: true, roughness: rough, metalness: metal, envMapIntensity: 0.9 });
     m.name = `world:${id}`;
+    if (info.emissive) {
+      // Self-illuminated surfaces (light panels, screens): the texture glows and feeds the bloom.
+      m.emissive = new THREE.Color(0xffffff);
+      m.emissiveMap = map;
+      m.emissiveIntensity = id === 'light_panel' || id === 'light_warm' ? 1.7 : 1.1;
+      m.color.setScalar(0.2);
+    } else if (this.quality !== 'low') {
+      const n = normalMapFor(id, this.quality, map, bump);
+      if (n) {
+        m.normalMap = n;
+        m.normalScale.set(1, 1);
+      }
+    }
     if (info.transparent) {
       m.transparent = true;
       m.depthWrite = false;
       m.opacity = OPACITY[id] ?? DEFAULT_OPACITY;
     }
-    if (info.surf === 'water') this.patchWater(m);
+    const water = info.surf === 'water';
+    const time = this.time;
+    m.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <lights_fragment_begin>', LIGHTS_BEGIN)
+        .replace('#include <lights_fragment_maps>', LIGHTS_MAPS);
+      if (water) {
+        shader.uniforms.basTime = time;
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\nuniform float basTime;')
+          .replace('#include <map_fragment>', WATER_MAP_FRAGMENT);
+      }
+    };
+    m.customProgramCacheKey = () => (water ? 'bas-world-water' : 'bas-world');
     if (this.lightMap) {
       m.lightMap = this.lightMap;
       m.lightMapIntensity = this.lightMapIntensity;
@@ -80,22 +204,11 @@ export class WorldMaterials {
     return m;
   }
 
-  private patchWater(m: THREE.MeshBasicMaterial): void {
-    const time = this.time;
-    m.onBeforeCompile = (shader) => {
-      shader.uniforms.basTime = time;
-      shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform float basTime;')
-        .replace('#include <map_fragment>', WATER_MAP_FRAGMENT);
-    };
-    m.customProgramCacheKey = () => 'bas-water';
-  }
-
   /**
    * Attach a lightmap to every world material (existing and future). The geometry must
    * carry a `uv1` attribute (the texture is switched to UV channel 1 here).
-   * MeshBasicMaterial computes texture × vertexColour × lightMapTexel × lightMapIntensity / PI,
-   * so with the default intensity (PI) a texel of 1.0 leaves the colour unchanged.
+   * The material computes albedo × lightMapTexel × lightMapIntensity / PI for the baked
+   * light, so with the default intensity (PI) a texel of 1.0 leaves the colour unchanged.
    */
   setLightMap(texture: THREE.Texture | null, intensity = Math.PI): void {
     if (texture) texture.channel = 1; // sample with the uv1 attribute
@@ -114,6 +227,7 @@ export class WorldMaterials {
     this.quality = quality;
     for (const [id, m] of this.materials) {
       m.map = getMaterialTexture(id, quality);
+      if (m.emissiveMap) m.emissiveMap = m.map;
       m.needsUpdate = true;
     }
   }

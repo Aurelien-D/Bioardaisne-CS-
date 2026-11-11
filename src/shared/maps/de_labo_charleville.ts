@@ -30,13 +30,18 @@ const H1 = 7.0; // upper-floor ceiling (absolute)
 
 export function build(): MapData {
   const b = new MapBuilder(meta, {
-    skyTop: 0x4f86c6,
-    skyHorizon: 0xcfe0ee,
-    sunDir: { x: -0.35, y: 0.8, z: 0.5 },
+    // Fin d'après-midi : soleil bas et chaud dans l'axe du cours (ouest-sud-ouest), brume légère.
+    skyTop: 0x41679f,
+    skyHorizon: 0xf0c9a0,
+    sunDir: { x: -0.72, y: 0.5, z: 0.38 },
+    sunColor: 0xffd2a0,
     sunIntensity: 1,
-    ambientIntensity: 0.5,
-    fogNear: 70,
-    fogFar: 260,
+    ambientSky: 0xb9c8e6,
+    ambientGround: 0x7a6a5a,
+    ambientIntensity: 0.42,
+    fogColor: 0xe6c7a6,
+    fogNear: 45,
+    fogFar: 190,
   });
 
   const door = (at: number, width = 1.4, height = 2.2): Opening => ({ at, width, height });

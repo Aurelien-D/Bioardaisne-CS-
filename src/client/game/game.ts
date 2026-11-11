@@ -115,6 +115,7 @@ export class Game {
   private stride = 0;
   private landDip = 0;
   private fov = 74;
+  private ads = 0;
   private respawnAt = 0;
   private deathPos: Vec3 | null = null;
   private selfCorpse: IAvatar | null = null;
@@ -687,7 +688,7 @@ export class Game {
     document.addEventListener('mousemove', (e) => {
       if (!this.capturing || !this.locked) return;
       const s = this.settings.value;
-      const zoom = this.me && this.me.zoom > 0 ? s.zoomSensitivity * (this.fov / s.fov) : 1;
+      const zoom = this.me && (this.me.zoom > 0 || this.ads > 0.5) ? s.zoomSensitivity * (this.fov / s.fov) : 1;
       const k = radiansPerCount(s.sensitivity) * zoom;
       this.look(-e.movementX * k, -e.movementY * k * (s.invertY ? -1 : 1));
     });
@@ -975,6 +976,12 @@ export class Game {
       const wid: WeaponId = slot ? slot.id : 'knife';
       const def = WEAPONS[wid];
       if (me.zoom > 0 && def.zoomFov) targetFov = def.zoomFov[me.zoom - 1] ?? s.fov;
+      // Aim down sights (held): every firearm except the scoped rifle, which has its own zoom.
+      const canAds = def.kind !== 'melee' && def.category !== 'sniper' && me.reload <= 0 && me.draw <= 0;
+      const wantAds = canAds && this.capturing && this.held.has('altFire') ? 1 : 0;
+      this.ads += (wantAds - this.ads) * Math.min(1, dt * 14);
+      if (this.ads < 0.002) this.ads = 0;
+      if (this.ads > 0) targetFov = s.fov * (1 - this.ads * (def.category === 'pistol' || def.category === 'shotgun' ? 0.16 : 0.3));
       if (this.vmWeapon !== wid) {
         this.viewmodel.setWeapon(wid);
         this.vmWeapon = wid;
@@ -993,6 +1000,7 @@ export class Game {
         punchPitch: me.punchPitch,
         punchYaw: me.punchYaw,
         zoom: me.zoom,
+        ads: this.ads,
         light: this.light,
       });
     } else if (this.deathPos) {
@@ -1015,6 +1023,7 @@ export class Game {
       cam.position.set(cx + Math.cos(t) * rad, Math.min(b.max.y - 0.5, 9), cz + Math.sin(t) * rad);
       cam.lookAt(cx, 1, cz);
     }
+    if (!me) this.ads = 0;
     this.fov += (targetFov - this.fov) * Math.min(1, dt * 14);
     this.engine.setFov(this.fov);
   }
@@ -1053,6 +1062,7 @@ export class Game {
       spread: me ? currentSpread(me) : 0,
       fov: this.fov,
       zoom: me ? me.zoom : 0,
+      ads: !!me && this.ads > 0.35,
       mode: m ? m.mode : 'tdm',
       phase: m ? m.phase : 'warmup',
       timeLeft: m && m.phaseEnd > 0 ? Math.max(0, (m.phaseEnd - now) / 1000) : 0,

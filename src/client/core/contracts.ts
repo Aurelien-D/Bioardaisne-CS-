@@ -64,8 +64,10 @@ export interface ViewModelFrame {
   /** Current recoil punch (radians). */
   punchPitch: number;
   punchYaw: number;
-  /** Sniper zoom level (the view model hides itself when > 0). */
+  /** Sniper zoom level (the scoped rifle hides itself when > 0). */
   zoom: number;
+  /** Aim-down-sights blend, 0 (hip) … 1 (sights aligned with the screen centre). */
+  ads: number;
   /** Light colour at the player's position. */
   light: THREE.Color;
 }
@@ -224,6 +226,8 @@ export interface HudFrame {
   fov: number;
   /** Sniper zoom level (> 0 shows the scope overlay and hides the crosshair). */
   zoom: number;
+  /** Aiming down the sights of the weapon: the crosshair is hidden (the weapon's own sight is used). */
+  ads?: boolean;
   mode: GameModeId;
   phase: MatchPhase;
   /** Seconds left in the current phase (0 if no timer). */
