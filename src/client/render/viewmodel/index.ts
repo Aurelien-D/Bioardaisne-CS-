@@ -2,16 +2,16 @@
 import * as THREE from 'three';
 import { WEAPONS, type WeaponId } from '../../../shared/weapons/defs';
 import type { IViewModel, ViewModelFrame } from '../../core/contracts';
-import { createFirstPersonArms, soldierReady, type FirstPersonArms } from '../avatar/soldier';
+import { createFirstPersonArms, soldierReady, type FirstPersonArms, type HandTarget } from '../avatar/soldier';
 import { createWeaponModel, type WeaponModel } from '../weapons/models';
 
 const HIP: Record<string, [number, number, number]> = {
-  melee: [0.17, -0.17, -0.4],
-  pistol: [0.14, -0.14, -0.42],
-  smg: [0.15, -0.16, -0.36],
-  rifle: [0.15, -0.165, -0.34],
-  shotgun: [0.15, -0.165, -0.35],
-  sniper: [0.15, -0.165, -0.33],
+  melee: [0.14, -0.12, -0.3],
+  pistol: [0.1, -0.105, -0.33],
+  smg: [0.1, -0.115, -0.27],
+  rifle: [0.1, -0.12, -0.25],
+  shotgun: [0.1, -0.12, -0.26],
+  sniper: [0.1, -0.12, -0.25],
 };
 
 class ViewModel implements IViewModel {
@@ -48,11 +48,12 @@ class ViewModel implements IViewModel {
   private fp: FirstPersonArms | null = null;
   private fpTeam = -1;
   private gR = new THREE.Vector3();
-  private gL = new THREE.Vector3();
+  private handR: HandTarget = { pos: new THREE.Vector3(), fingers: new THREE.Vector3(), palm: new THREE.Vector3() };
+  private handL: HandTarget = { pos: new THREE.Vector3(), fingers: new THREE.Vector3(), palm: new THREE.Vector3() };
 
   constructor() {
     this.root.add(this.holder);
-    this.holder.scale.setScalar(0.8);
+    this.holder.scale.setScalar(0.88);
     this.armR = this.makeArm();
     this.armL = this.makeArm();
     this.holder.add(this.armR, this.armL);
@@ -271,9 +272,9 @@ class ViewModel implements IViewModel {
     if (ads > 0 && this.model) {
       const sg = this.model.sight.position;
       const k = ads * ads * (3 - 2 * ads);
-      const ax = -sg.x * 0.8;
-      const ay = -sg.y * 0.8 - this.kickRot * 0.004;
-      const az = -0.2 - sg.z * 0.8 + this.kick * 0.03;
+      const ax = -sg.x * 0.88;
+      const ay = -sg.y * 0.88 - this.kickRot * 0.004;
+      const az = -0.2 - sg.z * 0.88 + this.kick * 0.03;
       x += (ax - x) * k;
       y += (ay - y) * k;
       z += (az - z) * k;
@@ -317,22 +318,37 @@ class ViewModel implements IViewModel {
     if (!this.fp || !this.model) return;
     this.armR.visible = this.armL.visible = false;
     this.root.updateMatrixWorld(true);
-    // Wrists sit a little behind and below the grips (targets in the root's space).
-    this.model.gripRight.getWorldPosition(this.gR);
-    this.root.worldToLocal(this.gR);
-    this.gR.z += 0.045;
-    this.gR.y -= 0.01;
-    let left: THREE.Vector3 | null = null;
-    if (cat !== 'melee') {
-      this.model.gripLeft.getWorldPosition(this.gL);
-      this.root.worldToLocal(this.gL);
-      // Support hand a little short of the fore-end tip so the arm stays bent.
-      this.gL.lerpVectors(this.gR, this.gL, 0.72);
-      this.gL.y -= 0.035;
-      this.gL.x -= 0.015;
-      left = this.gL;
+    const R = this.handR;
+    const L = this.handL;
+    // Firing hand: wraps the grip from behind, palm against its right side.
+    this.model.gripRight.getWorldPosition(R.pos);
+    this.root.worldToLocal(R.pos);
+    const grip = this.gR.copy(R.pos);
+    R.pos.x += 0.022;
+    R.pos.y -= 0.03;
+    R.pos.z += 0.075;
+    R.fingers.set(-0.12, 0.42, -1);
+    R.palm.set(-1, 0.1, 0);
+    let left: HandTarget | null = null;
+    if (cat === 'pistol') {
+      // Support hand cups the firing hand.
+      L.pos.set(grip.x - 0.035, grip.y - 0.05, grip.z + 0.07);
+      L.fingers.set(0.4, 0.35, -1);
+      L.palm.set(1, 0.15, 0);
+      left = L;
+    } else if (cat !== 'melee') {
+      // Support hand under the fore-end, palm up.
+      this.model.gripLeft.getWorldPosition(L.pos);
+      this.root.worldToLocal(L.pos);
+      L.pos.lerpVectors(grip, L.pos, 0.8);
+      L.pos.x -= 0.07;
+      L.pos.y -= 0.05;
+      L.pos.z += 0.02;
+      L.fingers.set(1, 0.15, -0.35);
+      L.palm.set(0.3, 1, 0.2);
+      left = L;
     }
-    this.fp.update(this.gR, left, (f.light.r + f.light.g + f.light.b) / 3);
+    this.fp.update(R, left, (f.light.r + f.light.g + f.light.b) / 3);
   }
 
   getMuzzle(out: THREE.Vector3): THREE.Vector3 {

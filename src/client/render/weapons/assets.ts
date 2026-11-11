@@ -86,13 +86,13 @@ const SPECS: Partial<Record<WeaponId, AssetSpec>> = {
   },
   deagle: {
     muzzle: [0, 0.0475, -0.1687],
-    sight: [0, 0.067, 0.076],
+    sight: [0, 0.066, 0.046],
     gripLeft: [0, -0.05, 0.025],
     credit: '« Desert Eagle » par ELIZION (sketchfab.com/ELIZION), CC BY 4.0',
   },
   smg: {
     muzzle: [0, 0.0178, -0.3227],
-    sight: [0, 0.103, 0.006],
+    sight: [0, 0.096, 0.005],
     gripLeft: [0, -0.041, -0.231],
     credit: '« KRSV VECTOR » par h1ggs (sketchfab.com/h1ggs), CC BY 4.0',
   },

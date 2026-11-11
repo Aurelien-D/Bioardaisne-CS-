@@ -26,6 +26,15 @@ sun.position.set(2, 4, 3);
 scene.add(sun);
 const camera = new THREE.PerspectiveCamera(54, innerWidth / innerHeight, 0.01, 10);
 scene.add(camera);
+// Debug views of the arm rig: ?cam=back|top|side (the game's camera sits at the origin, looking down -Z).
+const cam = q.get('cam');
+if (cam === 'back') camera.position.set(0, 0.25, 1.1);
+else if (cam === 'top') camera.position.set(0, 1.6, -0.2);
+else if (cam === 'side') camera.position.set(1.5, 0.0, -0.3);
+if (cam) {
+  camera.lookAt(0, -0.2, -0.35);
+  scene.add(new THREE.AxesHelper(0.3));
+}
 
 void (async () => {
   await Promise.all([preloadAvatarAssets(), preloadWeaponAssets()]);

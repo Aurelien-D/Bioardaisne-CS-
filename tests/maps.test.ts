@@ -4,6 +4,7 @@
  *  - Unit tests of the level-design helpers (walls, rooms, stairs, slabs…), of the prop
  *    library and of the validation tools.
  */
+import { PROP_MODELS } from '../src/shared/maps/props/modelmap';
 import { describe, expect, it } from 'vitest';
 import { PLAYER_HALF_WIDTH, STEP_HEIGHT } from '../src/shared/constants';
 import { MAP_MODULES, getMap, hasMap, listMaps } from '../src/shared/maps';
@@ -712,8 +713,15 @@ describe('prop library', () => {
         const b = newBuilder();
         placeProp(b, info.id, 5, 2, -3, q);
         expect(b.solids.length).toBe(base.solids.length);
-        expect(b.boxes.length).toBe(base.boxes.length);
-        expect(b.prims.length).toBe(base.prims.length);
+        if (PROP_MODELS[info.id]) {
+          // Drawn by a real 3D model: the procedural prop only contributes its colliders.
+          expect(b.boxes.length).toBe(0);
+          expect(b.prims.length).toBe(0);
+          expect(b.models.length).toBe(1);
+        } else {
+          expect(b.boxes.length).toBe(base.boxes.length);
+          expect(b.prims.length).toBe(base.prims.length);
+        }
         // Quarter turns swap the X and Z extents of every collider.
         b.solids.forEach((s, i) => {
           const o = base.solids[i]!;

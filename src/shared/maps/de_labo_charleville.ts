@@ -79,13 +79,13 @@ export function build(): MapData {
   // Rez-de-chaussée : sols
   // =====================================================================================
   floor(b, { x0: 3, z0: 15, x1: 18, z1: 33, y: 0.02, thickness: 0.3, mat: 'lino_green' }); // plateau technique
-  floor(b, { x0: 3, z0: 8, x1: 18, z1: 15, y: 0.02, thickness: 0.3, mat: 'concrete_floor' }); // laverie / réserve
+  floor(b, { x0: 3, z0: 8, x1: 18, z1: 15, y: 0.02, thickness: 0.3, mat: 'lino_grey' }); // laverie / réserve
   floor(b, { x0: 18, z0: 8, x1: 31, z1: 15, y: 0.02, thickness: 0.3, mat: 'carpet_grey' }); // bureaux des biologistes
   floor(b, { x0: 18, z0: 15, x1: 31, z1: 19, y: 0.02, thickness: 0.3, mat: 'lino_grey' }); // tri + boxes
   floor(b, { x0: 18, z0: 19, x1: 31, z1: 22, y: 0.02, thickness: 0.3, mat: 'lino_blue' }); // couloir des prélèvements
   floor(b, { x0: 18, z0: 22, x1: 31, z1: 33, y: 0.02, thickness: 0.3, mat: 'tile_beige' }); // accueil + attente
   floor(b, { x0: 31, z0: 17, x1: 36, z1: 33, y: 0.02, thickness: 0.3, mat: 'tile_white' }); // hall + porche
-  floor(b, { x0: 36, z0: 8, x1: 42, z1: 33, y: 0.02, thickness: 0.3, mat: 'concrete_floor' }); // annexe
+  floor(b, { x0: 36, z0: 8, x1: 42, z1: 33, y: 0.02, thickness: 0.3, mat: 'lino_grey' }); // annexe
 
   // =====================================================================================
   // Rez-de-chaussée : murs extérieurs

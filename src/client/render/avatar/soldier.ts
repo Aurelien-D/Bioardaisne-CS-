@@ -303,22 +303,39 @@ export class SoldierAvatar implements IAvatar {
 // the shader, posed by IK so the hands hold the weapon.
 // ---------------------------------------------------------------------------------
 
+/** Where a hand goes: wrist position, direction wrist → knuckles, and the way the palm faces. */
+export interface HandTarget {
+  pos: THREE.Vector3;
+  fingers: THREE.Vector3;
+  palm: THREE.Vector3;
+}
+
 export interface FirstPersonArms {
   root: THREE.Group;
-  /** Wrist targets in the root's parent space (view space). `gripL` null = one-handed. */
-  update(gripR: THREE.Vector3, gripL: THREE.Vector3 | null, light: number): void;
+  /** Hand targets in the root's parent space (view space). `left` null = hand out of view. */
+  update(right: HandTarget, left: HandTarget | null, light: number): void;
   dispose(): void;
 }
 
 /** Tunable pose constants (radians / metres), adjusted against screenshots. */
 const FP = {
-  scale: 1.0,
-  /** Where the character's feet go so that its eyes sit at the camera. */
-  y: -1.82,
-  z: -0.02,
+  scale: 0.88,
+  /** Where the character's feet go so that its shoulders sit just below and behind the camera. */
+  y: -1.8,
+  z: -0.05,
   x: 0.05,
-  curl: 1.15,
+  /** Finger curl per joint (knuckle, middle, tip). */
+  curl: [0.95, 1.25, 0.8],
 };
+
+interface Hand {
+  upper: THREE.Object3D;
+  fore: THREE.Object3D;
+  hand: THREE.Object3D;
+  /** Finger direction and palm normal in the hand bone's local space. */
+  fLocal: THREE.Vector3;
+  nLocal: THREE.Vector3;
+}
 
 export function createFirstPersonArms(team: number): FirstPersonArms | null {
   const t = template;
@@ -362,42 +379,89 @@ export function createFirstPersonArms(team: number): FirstPersonArms | null {
     base.push(m.color.clone());
   });
   const bone = (n: string): THREE.Object3D | null => model.getObjectByName(`mixamorig${n}`) ?? null;
-  const chain = {
-    ra: bone('RightArm'),
-    rf: bone('RightForeArm'),
-    rh: bone('RightHand'),
-    la: bone('LeftArm'),
-    lf: bone('LeftForeArm'),
-    lh: bone('LeftHand'),
+  root.updateMatrixWorld(true);
+  const v1 = new THREE.Vector3();
+  const v2 = new THREE.Vector3();
+  const v3 = new THREE.Vector3();
+  const q1 = new THREE.Quaternion();
+  const q2 = new THREE.Quaternion();
+  const m1 = new THREE.Matrix4();
+  const m2 = new THREE.Matrix4();
+
+  /** Measure a hand in the rest pose (T-pose: palms face the ground) and curl its fingers. */
+  const makeHand = (side: 'Left' | 'Right'): Hand | null => {
+    const upper = bone(`${side}Arm`);
+    const fore = bone(`${side}ForeArm`);
+    const hand = bone(`${side}Hand`);
+    const mid = bone(`${side}HandMiddle1`) ?? bone(`${side}HandIndex1`);
+    const idx = bone(`${side}HandIndex1`);
+    const far = bone(`${side}HandPinky1`) ?? bone(`${side}HandRing1`) ?? bone(`${side}HandMiddle1`);
+    if (!upper || !fore || !hand || !mid) return null;
+    const hp = hand.getWorldPosition(new THREE.Vector3());
+    const fW = mid.getWorldPosition(new THREE.Vector3()).sub(hp).normalize();
+    const nW = new THREE.Vector3(0, -1, 0);
+    if (idx && far && idx !== far) {
+      const across = idx.getWorldPosition(new THREE.Vector3()).sub(far.getWorldPosition(new THREE.Vector3())).normalize();
+      nW.crossVectors(fW, across).normalize();
+      if (nW.y > 0) nW.negate();
+    }
+    const inv = hand.getWorldQuaternion(new THREE.Quaternion()).invert();
+    // Curl the fingers toward the palm (rotation about the knuckle axis).
+    const axisW = new THREE.Vector3().crossVectors(fW, nW).normalize();
+    model.traverse((o) => {
+      const mm = new RegExp(`^mixamorig${side}Hand(Index|Middle|Ring|Pinky|Thumb)([123])$`).exec(o.name);
+      if (!mm) return;
+      const k = Number(mm[2]) - 1;
+      let axis = axisW;
+      let angle = FP.curl[k] ?? 0.8;
+      if (mm[1] === 'Thumb') {
+        // The thumb folds across the palm: rotate its own direction toward the palm normal.
+        const child = o.children[0];
+        if (!child) return;
+        const dir = child.getWorldPosition(new THREE.Vector3()).sub(o.getWorldPosition(new THREE.Vector3())).normalize();
+        axis = new THREE.Vector3().crossVectors(dir, nW);
+        if (axis.lengthSq() < 1e-6) return;
+        axis.normalize();
+        angle = k === 0 ? 0.75 : 0.5;
+      }
+      const local = axis.clone().applyQuaternion(o.getWorldQuaternion(new THREE.Quaternion()).invert());
+      o.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(local, angle));
+    });
+    return { upper, fore, hand, fLocal: fW.clone().applyQuaternion(inv), nLocal: nW.clone().applyQuaternion(inv) };
   };
-  // Rest pose of the arm bones (IK starts from it every frame) and curled fingers.
+  const right = makeHand('Right');
+  const left = makeHand('Left');
   const rest = new Map<THREE.Object3D, THREE.Quaternion>();
-  for (const b of Object.values(chain)) if (b) rest.set(b, b.quaternion.clone());
-  model.traverse((o) => {
-    const m = /^mixamorig(Left|Right)Hand(Index|Middle|Ring|Pinky)([123])$/.exec(o.name);
-    if (m) o.rotateZ((m[1] === 'Right' ? -1 : 1) * FP.curl * (m[3] === '1' ? 0.75 : 1));
-  });
+  for (const h of [right, left]) if (h) for (const b of [h.upper, h.fore, h.hand]) rest.set(b, b.quaternion.clone());
+
   const pole = new THREE.Vector3();
   const tgt = new THREE.Vector3();
+  /** Orthonormal basis [f, n, f × n] as a rotation matrix. */
+  const basis = (f: THREE.Vector3, n: THREE.Vector3, out: THREE.Matrix4): THREE.Matrix4 => {
+    v1.copy(f).normalize();
+    v2.copy(n).addScaledVector(v1, -n.dot(v1)).normalize();
+    v3.crossVectors(v1, v2);
+    return out.makeBasis(v1, v2, v3);
+  };
+  const pose = (h: Hand, target: HandTarget, poleX: number): void => {
+    root.localToWorld(tgt.copy(target.pos));
+    solveTwoBone(h.upper, h.fore, h.hand, tgt, pole.set(poleX, -0.65, 0.15));
+    // Turn the hand so its fingers and palm face the requested way.
+    h.hand.getWorldQuaternion(q1);
+    basis(v1.copy(h.fLocal).applyQuaternion(q1), v2.copy(h.nLocal).applyQuaternion(q1), m1);
+    basis(target.fingers, target.palm, m2);
+    m2.multiply(m1.transpose());
+    q2.setFromRotationMatrix(m2).multiply(q1);
+    setWorldQuaternion(h.hand, q2);
+  };
+  const hidden: HandTarget = { pos: new THREE.Vector3(-0.3, -0.95, 0.15), fingers: new THREE.Vector3(0, 0, -1), palm: new THREE.Vector3(0, -1, 0) };
   return {
     root,
-    update(gripR, gripL, light) {
+    update(rightTarget, leftTarget, light) {
       for (const [b, q] of rest) b.quaternion.copy(q);
       root.updateMatrixWorld(true);
-      if (chain.ra && chain.rf && chain.rh) {
-        root.localToWorld(tgt.copy(gripR));
-        solveTwoBone(chain.ra, chain.rf, chain.rh, tgt, pole.set(0.75, -0.65, 0.1));
-      }
-      if (chain.la && chain.lf && chain.lh) {
-        if (gripL) {
-          root.localToWorld(tgt.copy(gripL));
-          solveTwoBone(chain.la, chain.lf, chain.lh, tgt, pole.set(-0.75, -0.65, 0.1));
-        } else {
-          // Free hand: tucked low, out of view.
-          root.localToWorld(tgt.set(-0.25, -0.6, -0.05));
-          solveTwoBone(chain.la, chain.lf, chain.lh, tgt, pole.set(-0.75, -0.65, 0.1));
-        }
-      }
+      if (right) pose(right, rightTarget, 0.8);
+      if (left) pose(left, leftTarget ?? hidden, -0.8);
       const s = 0.5 + 0.5 * Math.min(1.2, light);
       for (let i = 0; i < mats.length; i++) mats[i]!.color.setRGB(base[i]!.r * s, base[i]!.g * s, base[i]!.b * s);
     },

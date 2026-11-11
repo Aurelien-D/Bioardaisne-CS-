@@ -51,7 +51,8 @@ export function solveTwoBone(upper: THREE.Object3D, lower: THREE.Object3D, end: 
   r0.setFromAxisAngle(v.copy(axis0).applyQuaternion(qa), acAb1 - acAb0);
   r1.setFromAxisAngle(v.copy(axis0).applyQuaternion(qb), baBc1 - baBc0);
   r2.setFromAxisAngle(v.copy(axis1).applyQuaternion(qa), acAt0);
-  upper.quaternion.multiply(r0.multiply(r2));
+  // Local composition = bend first (r0), then swing the whole chain onto the target (r2).
+  upper.quaternion.multiply(r2.multiply(r0));
   lower.quaternion.multiply(r1);
   upper.updateMatrixWorld(true);
 }
