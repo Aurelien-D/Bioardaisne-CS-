@@ -17,7 +17,7 @@ Aucune installation côté joueur : un navigateur récent sur PC (Chrome, Edge o
 | Mode **Match à mort par équipe** en manches | ✅ |
 | Carte `de_labo_charleville` (inspirée du site du cours Briand) | ✅ |
 | Menus, options (souris, vidéo, audio, viseur, touches), HUD complet, audio procédural | ✅ |
-| Rendu réaliste : matériaux physiques photographiés, ciel HDR, soleil et ombres dynamiques, occlusion ambiante, bloom, tonemapping filmique | ✅ |
+| Rendu réaliste : matériaux physiques photographiés, ciel HDR, soleil bas et ombres dynamiques, reflets sur les sols (linos brillants, chaussée mouillée), rayons de soleil, occlusion ambiante, bloom, tonemapping filmique | ✅ |
 | Personnages animés, mobilier, véhicules et arbres en vrais modèles 3D (sous licence libre, voir plus bas) | ✅ |
 | Cartes `de_rethel` et `de_charleville` | ⏳ à faire |
 | Modes **Audit surprise** (désamorçage) et **Sécurisation du laboratoire** | ⏳ à faire (désactivés dans les menus ; zones et points déjà posés sur la carte) |
@@ -182,6 +182,9 @@ Collisions, rendu, éclairage et navigation des bots sont dérivés automatiquem
   connus dans `tests/lightbake.test.ts`.
 - Une partie du mobilier de laboratoire (automates, paillasses, hottes) reste modélisée par le code, faute de modèles libres convaincants.
 - En qualité « basse », les modèles 3D d'armes et de personnages sont remplacés par leurs versions simplifiées.
+- Les reflets de sol et l'occlusion ambiante n'existent qu'en qualité « élevée » (réglage par défaut). Si la machine ne
+  tient pas 34 images par seconde, le jeu retire de lui-même les reflets puis baisse la résolution ; sans accélération
+  graphique (rendu logiciel), ces effets sont coupés d'office. Pour un PC modeste, choisir « moyenne » ou « basse ».
 - La visée à l'épaule est visuelle (zoom et alignement du viseur) : elle ne modifie pas la précision calculée par le serveur.
 - Jeu pensé pour PC (clavier et souris) ; pas de version mobile.
 

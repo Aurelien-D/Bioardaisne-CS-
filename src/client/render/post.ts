@@ -87,13 +87,17 @@ const GradeShader = {
     }`,
 };
 
-/** True when WebGL runs on the CPU (no graphics acceleration): the costliest effects are skipped. */
-function softwareRenderer(renderer: THREE.WebGLRenderer): boolean {
+/**
+ * True when WebGL runs on the CPU (no graphics acceleration): the costliest effects are skipped.
+ * `?fx` (or the older `?forceao`) in the page address keeps them on anyway (screenshots, tests).
+ */
+export function softwareRenderer(renderer: THREE.WebGLRenderer): boolean {
   try {
     const gl = renderer.getContext();
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
     const name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
-    return /swiftshader|llvmpipe|software/i.test(name) && !new URLSearchParams(location.search).has('forceao');
+    const q = new URLSearchParams(location.search);
+    return /swiftshader|llvmpipe|software/i.test(name) && !q.has('forceao') && !q.has('fx');
   } catch {
     return false;
   }

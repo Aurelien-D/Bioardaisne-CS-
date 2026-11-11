@@ -235,6 +235,7 @@ async function main() {
     if (opts.quality) params.set('quality', opts.quality);
     if (opts.markers) params.set('markers', '1');
     if (opts.uv) params.set('uv', '1');
+    params.set('fx', '1'); // keep GPU-only effects on under software rendering
     const url = `http://localhost:${opts.port}/dev/viewer.html?${params}`;
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: opts.timeout * 1000 });
 

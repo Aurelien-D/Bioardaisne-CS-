@@ -17,7 +17,7 @@
 import { createEnvironment, loadHdrSky, type HdrSky } from './env';
 import { preloadPhotoTextures } from './textures/photo';
 import type { MaterialId } from '../../shared/maps/materials';
-import { createPost, type Post } from './post';
+import { createPost, softwareRenderer, type Post } from './post';
 import { buildMapModels, type MapModels } from './world/models';
 import { FloorReflection } from './world/reflection';
 import * as THREE from 'three';
@@ -46,6 +46,10 @@ const PIXEL_RATIO_CAP: Record<Quality, number> = { low: 1, medium: 1.5, high: 2 
 
 /** Neutral rig for dynamic objects: lit side ≈ 1.1 × albedo, shaded side ≈ 0.5 × albedo. */
 const RIG_HEMI = Math.PI * 0.62;
+/** Automatic fallback: below this frame rate for a few seconds, the best preset sheds effects. */
+const ADAPT_MIN_FPS = 34;
+/** Render-resolution factor of each fallback step (step 1 only drops the floor reflections). */
+const ADAPT_SCALES = [1, 1, 0.8, 0.62];
 /** Resolution of the floor-reflection render, relative to the screen. */
 const REFLECTION_SCALE = 0.5;
 
@@ -126,6 +130,16 @@ class Engine implements IEngine {
   /** Planar floor reflections (best preset only) and the floor levels of the current map, lowest first. */
   private reflection: FloorReflection | null = null;
   private floorLevels: number[] = [];
+  /**
+   * Automatic fallback when the machine cannot keep up (best preset): step 1 drops the floor
+   * reflections, steps 2 and 3 lower the render resolution. Reset by a new map or preset.
+   */
+  private adaptStep = 0;
+  private adaptSlow = 0;
+  private adaptFrames = 0;
+  private lastFrame = 0;
+  private frameMs = 16;
+  private software: boolean | null = null;
   private width = 0;
   private height = 0;
   private disposed = false;
@@ -315,6 +329,9 @@ class Engine implements IEngine {
       }
       this.fitShadow(map);
       this.floorLevels = floorLevelsOf(map);
+      this.adaptStep = 0;
+      this.adaptSlow = 0;
+      this.adaptFrames = 0;
 
       // Compile the shaders and upload the textures now rather than on the first frame.
       onProgress?.(0.95, 'Derniers contrôles qualité…');
@@ -486,6 +503,9 @@ class Engine implements IEngine {
     const quality = this.settings.value.quality;
     if (quality !== this.quality) {
       this.quality = quality;
+      this.adaptStep = 0;
+      this.adaptSlow = 0;
+      this.adaptFrames = 0;
       // Antialiasing is fixed at context creation; textures and resolution follow at once.
       this.materials?.setQuality(quality);
     }
@@ -499,7 +519,7 @@ class Engine implements IEngine {
     const h = this.canvas.clientHeight || this.canvas.height;
     if (w <= 0 || h <= 0) return;
     const scale = Math.min(1, Math.max(0.25, this.settings.value.resolutionScale || 1));
-    const ratio = Math.min(window.devicePixelRatio || 1, PIXEL_RATIO_CAP[this.quality]) * scale;
+    const ratio = Math.min(window.devicePixelRatio || 1, PIXEL_RATIO_CAP[this.quality]) * scale * ADAPT_SCALES[this.adaptStep]!;
     if (w === this.width && h === this.height && ratio === this.renderer.getPixelRatio()) return;
     this.width = w;
     this.height = h;
@@ -514,6 +534,26 @@ class Engine implements IEngine {
   }
 
   // --- Frame ----------------------------------------------------------------------
+
+  /** Watches the frame time on the best preset and sheds the costliest effects when it stays too slow. */
+  private adapt(): void {
+    const now = performance.now();
+    const dt = now - this.lastFrame;
+    this.lastFrame = now;
+    if (this.quality !== 'high' || !this.world || this.adaptStep >= ADAPT_SCALES.length - 1 || this.software) return;
+    if (dt <= 0 || dt > 500) return; // first frame, tab in the background, loading hitch
+    this.frameMs += (dt - this.frameMs) * 0.05;
+    // Let shaders compile and textures upload before judging.
+    if (++this.adaptFrames < 90) return;
+    this.adaptSlow = this.frameMs > 1000 / ADAPT_MIN_FPS ? this.adaptSlow + dt : Math.max(0, this.adaptSlow - dt * 2);
+    if (this.adaptSlow < 3500) return;
+    this.adaptStep++;
+    this.adaptSlow = 0;
+    this.adaptFrames = 30;
+    this.frameMs = 16;
+    this.sizeDirty = true;
+    console.info(`[rendu] Machine trop juste pour le réglage « élevé » : allègement automatique (palier ${this.adaptStep}).`);
+  }
 
   /** Where the sun is on screen and how strongly it should streak (light shafts of the post chain). */
   private updateShafts(): void {
@@ -554,7 +594,9 @@ class Engine implements IEngine {
     // One shadow-map update per frame, whatever the number of scene renders (reflection, AO, main).
     renderer.shadowMap.autoUpdate = false;
     renderer.shadowMap.needsUpdate = true;
-    if (this.quality === 'high' && this.materials && this.floorLevels.length) {
+    this.adapt();
+    if (this.software === null) this.software = softwareRenderer(renderer);
+    if (this.quality === 'high' && this.adaptStep === 0 && !this.software && this.materials && this.floorLevels.length) {
       // Mirror image of the scene about the floor under the camera, for the glossy floors.
       if (!this.reflection) {
         const size = renderer.getDrawingBufferSize(this.tmpSize);
@@ -567,6 +609,7 @@ class Engine implements IEngine {
       this.reflection.render(renderer, this.scene, this.camera, level);
     } else if (this.reflection) {
       this.reflection.off();
+      this.materials?.setReflection(null);
     }
     if (this.quality !== 'low') {
       // Filmic pipeline: HDR + bloom + tone mapping + grade.
