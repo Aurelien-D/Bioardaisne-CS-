@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BioArd'Aisne Strike — banc d'essai des menus</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #05101d;
+      }
+      #scene {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #log {
+        position: fixed;
+        right: 8px;
+        top: 8px;
+        z-index: 100;
+        max-width: 46ch;
+        padding: 6px 9px;
+        background: rgba(0, 0, 0, 0.72);
+        border-left: 3px solid #45d6a0;
+        border-radius: 3px;
+        color: #c8f5e4;
+        font: 11px/1.5 ui-monospace, Consolas, monospace;
+        white-space: pre-wrap;
+        pointer-events: none;
+      }
+      #log:empty {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Stand-in for the game canvas: an animated "3D scene" behind the menus. -->
+    <canvas id="scene"></canvas>
+    <div id="menus"></div>
+    <div id="log"></div>
+    <script type="module" src="/src/client/dev/menus.ts"></script>
+  </body>
+</html>

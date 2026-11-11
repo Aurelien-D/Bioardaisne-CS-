@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BioArd'Aisne Strike — banc d'essai audio</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      :root {
+        --blue: #3182ce;
+        --blue-dark: #2b6cb0;
+        --navy: #003f71;
+        --red: #e7343f;
+        --grey: #4a4a49;
+        --light: #eaf6fe;
+        --bg: #05101d;
+        --panel: #0a1f38;
+        --panel-2: #0e2946;
+        --line: rgba(140, 190, 240, 0.18);
+        --text: #f3f8ff;
+        --dim: #a9c0d8;
+        --mute: #7089a3;
+        --green: #45d6a0;
+        --amber: #ffc24a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.45 Inter, 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 10px 20px;
+        background: linear-gradient(90deg, var(--navy), #062a4d 60%, #05182c);
+        border-bottom: 2px solid var(--blue);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+      }
+      header h1 span {
+        color: var(--red);
+      }
+      #status {
+        flex: 1;
+        min-width: 0;
+        color: var(--dim);
+        font: 12px/1.3 ui-monospace, Consolas, monospace;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #status b {
+        color: var(--green);
+        font-weight: 600;
+      }
+      #status b.off {
+        color: var(--amber);
+      }
+      main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 520px;
+        gap: 16px;
+        padding: 16px 20px 40px;
+        align-items: start;
+      }
+      @media (max-width: 1250px) {
+        main {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px 14px 14px;
+        margin-bottom: 14px;
+      }
+      section h2 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: #8fc4f5;
+      }
+      section h2 small {
+        margin-left: 8px;
+        font-weight: 400;
+        letter-spacing: 0;
+        text-transform: none;
+        color: var(--mute);
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .row + .row {
+        margin-top: 8px;
+      }
+      .row > .tag {
+        flex: 0 0 118px;
+        color: var(--dim);
+        font-size: 12.5px;
+      }
+      button {
+        appearance: none;
+        border: 1px solid rgba(120, 180, 240, 0.28);
+        background: var(--panel-2);
+        color: var(--text);
+        font: inherit;
+        font-size: 12.5px;
+        padding: 5px 10px;
+        border-radius: 5px;
+        cursor: pointer;
+        transition:
+          background 0.08s,
+          border-color 0.08s,
+          transform 0.05s;
+      }
+      button:hover {
+        background: #15406e;
+        border-color: var(--blue);
+      }
+      button:active {
+        transform: translateY(1px);
+        background: var(--blue-dark);
+      }
+      button.primary {
+        background: var(--blue);
+        border-color: var(--blue);
+        font-weight: 600;
+      }
+      button.primary:hover {
+        background: #3f93e0;
+      }
+      button.danger {
+        background: rgba(231, 52, 63, 0.16);
+        border-color: rgba(231, 52, 63, 0.6);
+      }
+      button.danger:hover {
+        background: var(--red);
+      }
+      button.on {
+        background: var(--blue-dark);
+        border-color: #7cc0ff;
+      }
+      button.scope {
+        padding: 5px 7px;
+        color: var(--mute);
+      }
+      .weapons {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+        gap: 8px;
+      }
+      .weapon {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 9px 9px;
+        background: rgba(14, 41, 70, 0.55);
+      }
+      .weapon strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 13px;
+      }
+      .weapon strong em {
+        font-style: normal;
+        font-weight: 400;
+        color: var(--mute);
+        margin-left: 6px;
+        font-size: 11.5px;
+      }
+      .controls {
+        display: grid;
+        grid-template-columns: 150px 1fr 64px;
+        gap: 6px 10px;
+        align-items: center;
+        font-size: 12.5px;
+        color: var(--dim);
+      }
+      .controls output {
+        font: 12px ui-monospace, Consolas, monospace;
+        color: var(--text);
+        text-align: right;
+      }
+      input[type='range'] {
+        width: 100%;
+        accent-color: var(--blue);
+      }
+      label.check {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12.5px;
+        color: var(--dim);
+        cursor: pointer;
+      }
+      .source {
+        display: grid;
+        grid-template-columns: 150px 1fr;
+        gap: 14px;
+        align-items: center;
+      }
+      #radar {
+        width: 150px;
+        height: 150px;
+        border-radius: 50%;
+        background: #071829;
+        border: 1px solid var(--line);
+      }
+      #scope {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 6px;
+        background: #030b15;
+        border: 1px solid var(--line);
+      }
+      #scope-title {
+        margin: 8px 0 0;
+        color: var(--dim);
+        font-size: 12.5px;
+      }
+      select {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid rgba(120, 180, 240, 0.28);
+        border-radius: 5px;
+        padding: 5px 8px;
+        font: inherit;
+        font-size: 12.5px;
+        max-width: 100%;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font: 11.5px/1.35 ui-monospace, Consolas, monospace;
+      }
+      th,
+      td {
+        padding: 3px 6px;
+        text-align: right;
+        border-bottom: 1px solid rgba(140, 190, 240, 0.09);
+        white-space: nowrap;
+      }
+      th {
+        position: sticky;
+        top: 0;
+        background: var(--panel);
+        color: #8fc4f5;
+        font-weight: 600;
+      }
+      th:first-child,
+      td:first-child {
+        text-align: left;
+      }
+      td.warn {
+        color: var(--amber);
+      }
+      td.bad {
+        color: #ff7d86;
+        font-weight: 700;
+      }
+      #table-wrap {
+        max-height: 560px;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      #analysis-note {
+        color: var(--mute);
+        font-size: 12px;
+        margin: 8px 0 0;
+      }
+      #gallery {
+        display: none;
+        position: absolute;
+        left: 0;
+        top: 0;
+        z-index: 50;
+        padding: 14px;
+        background: var(--bg);
+        gap: 10px;
+        grid-template-columns: repeat(4, 470px);
+      }
+      #gallery.show {
+        display: grid;
+      }
+      #gallery canvas {
+        width: 470px;
+        height: 330px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: #030b15;
+      }
+      .hint {
+        color: var(--mute);
+        font-size: 12px;
+        margin: 8px 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>BioArd'Aisne <span>Strike</span> — banc d'essai audio</h1>
+      <div id="status">Cliquez n'importe où pour activer le son…</div>
+      <button id="stop-all" class="danger">Tout arrêter</button>
+    </header>
+    <main>
+      <div id="board"></div>
+      <div id="side"></div>
+    </main>
+    <div id="gallery"></div>
+    <script type="module" src="/src/client/dev/audio.ts"></script>
+  </body>
+</html>
