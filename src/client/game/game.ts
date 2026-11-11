@@ -168,6 +168,8 @@ export class Game {
     this.engine = createEngine(canvas, this.settings);
     this.audio = createAudio(this.settings);
     this.viewmodel = createViewModel();
+    // Animation-driven weapon sounds (magazine, bolt, slide…): played when the part actually moves.
+    this.viewmodel.onFoley = (sound, weapon) => this.audio.foley?.(sound, weapon);
     this.engine.viewScene.add(this.viewmodel.root);
     this.viewmodel.setVisible(false);
     this.effects = createEffects(this.engine);
@@ -880,7 +882,7 @@ export class Game {
       this.viewmodel.setWeapon(wid);
       this.vmWeapon = wid;
       this.viewmodel.onDraw(def.drawTime);
-      this.audio.draw(wid, null);
+      if (!this.viewmodel.foley) this.audio.draw(wid, null);
     }
     if (ev.fired) {
       this.viewmodel.onFire();
@@ -920,7 +922,7 @@ export class Game {
     }
     if (ev.reloadStarted) {
       this.viewmodel.onReload(def.reloadTime);
-      this.audio.reload(wid, def.reloadTime, null);
+      if (!this.viewmodel.foley) this.audio.reload(wid, def.reloadTime, null);
     }
     if (ev.zoomChanged) this.audio.zoom();
     if (ev.jumped) this.audio.jump(null);

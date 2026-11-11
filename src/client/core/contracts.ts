@@ -74,9 +74,22 @@ export interface ViewModelFrame {
   light: THREE.Color;
 }
 
+/**
+ * Mechanical sound of a first-person weapon animation, emitted at the exact moment the part
+ * moves (magazine leaving the well, bolt slamming home…), so sound and motion stay in sync.
+ */
+export type WeaponFoley = 'mag_out' | 'mag_in' | 'bolt_back' | 'bolt_forward' | 'slide' | 'pump' | 'shell_in' | 'cloth' | 'draw' | 'swish' | 'click';
+
 export interface IViewModel {
   /** Add this to engine.viewScene. */
   readonly root: THREE.Object3D;
+  /**
+   * True when this view model emits the reload / draw / inspect sounds itself through `onFoley`:
+   * the game then skips the generic `audio.reload()` and `audio.draw()` for the local player.
+   */
+  readonly foley?: boolean;
+  /** Set by the game: receives the foley events of the animations. */
+  onFoley?: ((sound: WeaponFoley, weapon: WeaponId) => void) | null;
   /** Swap the weapon mesh (null = empty hands). Call onDraw() to play the draw animation. */
   setWeapon(id: WeaponId | null): void;
   onFire(): void;
@@ -183,6 +196,8 @@ export interface IAudio {
   setListener(pos: Vec3, forward: Vec3): void;
   /** Gunshot. `pos` = null for the local player's own weapon (not spatialised, full weight). */
   shot(weapon: WeaponId, pos: Vec3 | null): void;
+  /** One mechanical sound of the local player's weapon, in sync with its animation (see WeaponFoley). */
+  foley?(sound: WeaponFoley, weapon: WeaponId): void;
   /** Full reload sequence (mag out / mag in / bolt) spread over `duration` seconds. */
   reload(weapon: WeaponId, duration: number, pos: Vec3 | null): void;
   draw(weapon: WeaponId, pos: Vec3 | null): void;
