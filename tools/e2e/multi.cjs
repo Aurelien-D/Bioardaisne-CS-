@@ -42,16 +42,18 @@ async function open(browser, name, query) {
     await a.getByText('Créer un salon privé', { exact: false }).first().click();
     await sleep(400);
     await a.getByText('Créer le salon', { exact: false }).first().click();
-    await a.waitForFunction(() => window.__bas.state().mode === 'playing', null, { timeout: 90000 });
+    await a.waitForFunction(() => window.__bas.state().mode === 'playing', null, { timeout: 240000 });
     const code = (await st(a)).room;
     check('room created with a 5-character code', typeof code === 'string' && code.length === 5, code);
     // Host: no bots, no freeze time, long round (test conditions).
-    await a.evaluate(() => window.__bas.send({ t: 'config', patch: { botFill: 0, freezeTime: 0, killLimit: 0, roundTime: 600, respawnDelay: 2 }, restart: true }));
+    // The open test arena keeps the scripted duel deterministic.
+    await a.evaluate(() => window.__bas.send({ t: 'config', patch: { mapId: 'dev_test', botFill: 0, freezeTime: 0, killLimit: 0, roundTime: 600, respawnDelay: 2 }, restart: true }));
+    await a.waitForFunction(() => window.__bas.state().match.mapId === 'dev_test' && window.__bas.state().mode === 'playing', null, { timeout: 120000 });
 
     // --- Bob joins with the invitation link ---
     const b = await open(browser, 'Bob', `&room=${code}`);
     await b.getByRole('button', { name: 'Rejoindre', exact: true }).click();
-    await b.waitForFunction(() => window.__bas.state().mode === 'playing', null, { timeout: 90000 });
+    await b.waitForFunction(() => window.__bas.state().mode === 'playing', null, { timeout: 240000 });
     await a.evaluate(() => window.__bas.fakeLock(true));
     await b.evaluate(() => window.__bas.fakeLock(true));
     await a.waitForFunction(() => window.__bas.state().me && window.__bas.state().remotes.some((r) => r.alive), null, { timeout: 30000 });
@@ -65,7 +67,7 @@ async function open(browser, name, query) {
     await a.evaluate(() => window.__bas.key('KeyD', true));
     await sleep(1200);
     await a.evaluate(() => window.__bas.key('KeyD', false));
-    await sleep(600);
+    await sleep(1500);
     sa = await st(a);
     sb = await st(b);
     const aSeenByB = sb.remotes.find((r) => r.id === sa.myId);

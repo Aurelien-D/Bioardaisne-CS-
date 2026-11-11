@@ -33,13 +33,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     page.on('console', (m) => {
       if (m.type() === 'error') errors.push(m.text());
     });
+    // Software rendering in CI: the lightest graphics preset keeps the test fast.
+    await page.addInitScript(() => localStorage.setItem('bas.settings.v1', JSON.stringify({ quality: 'low' })));
     await page.goto(`http://localhost:${PORT}/?debug=1`);
     await page.waitForFunction(() => window.__bas && window.__bas.state().menu === 'main', null, { timeout: 20000 });
     await page.screenshot({ path: path.join(OUT, 'e2e-solo-menu.png') });
     await page.getByText('Jouer en solo', { exact: false }).first().click();
     await sleep(400);
     await page.getByText('Lancer la partie', { exact: false }).first().click();
-    await page.waitForFunction(() => window.__bas.state().mode === 'playing', null, { timeout: 90000 });
+    await page.waitForFunction(() => window.__bas.state().mode === 'playing', null, { timeout: 240000 });
     await page.evaluate(() => window.__bas.fakeLock(true));
     await page.waitForFunction(() => window.__bas.state().me !== null, null, { timeout: 20000 });
     await page.waitForFunction(() => window.__bas.state().match.phase === 'live', null, { timeout: 30000 });

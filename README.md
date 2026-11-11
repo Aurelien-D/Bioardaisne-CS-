@@ -17,6 +17,7 @@ Aucune installation côté joueur : un navigateur récent sur PC (Chrome, Edge o
 | Mode **Match à mort par équipe** en manches | ✅ |
 | Carte `de_labo_charleville` (inspirée du site du cours Briand) | ✅ |
 | Menus, options (souris, vidéo, audio, viseur, touches), HUD complet, audio procédural | ✅ |
+| Rendu réaliste : matériaux physiques, soleil et ombres dynamiques, bloom, tonemapping filmique | ✅ |
 | Cartes `de_rethel` et `de_charleville` | ⏳ à faire |
 | Modes **Audit surprise** (désamorçage) et **Sécurisation du laboratoire** | ⏳ à faire (désactivés dans les menus ; zones et points déjà posés sur la carte) |
 
@@ -55,7 +56,7 @@ Les touches sont **physiques** : sur un clavier AZERTY, on joue bien avec ZQSD. 
 |---|---|
 | Se déplacer | Z Q S D |
 | Sauter / s'accroupir / marche silencieuse | Espace / Ctrl gauche ou C / Maj gauche |
-| Tirer / lunette | Clic gauche / clic droit |
+| Tirer / viser à l'épaule (lunette pour Le Microscope) | Clic gauche / clic droit maintenu |
 | Recharger | R |
 | Armes | 1, 2, 3, molette, A (dernière arme) |
 | Tableau des scores | Tab |
@@ -132,6 +133,8 @@ Outils :
 | `node tools/shot.cjs --map <carte> --pose "x,y,z,lacet,tangage"` | Captures 3D d'une carte |
 | `npx tsx tools/sim-bench.ts --map <carte> --bots 10 --minutes 4` | Match de bots sans affichage (équilibre, blocages, performances) |
 | `node tools/e2e/solo.cjs` et `node tools/e2e/multi.cjs` | Tests de bout en bout dans un navigateur sans affichage (après `npm run build`, nécessitent Playwright) |
+| `node tools/e2e/look.cjs` | Captures en vue subjective (hanche, visée, tir) |
+| `npm run build:client && node tools/make-artifact.mjs <fichier.html>` | Assemble le jeu en **une seule page HTML** (solo uniquement, sans serveur) |
 
 L'architecture est décrite dans [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). En résumé :
 
@@ -159,7 +162,8 @@ Collisions, rendu, éclairage et navigation des bots sont dérivés automatiquem
 - Éclairage précalculé : trois contrôles de qualité ne sont pas encore atteints (raccord de lumière entre deux
   dalles de sol, soleil à travers une vitre, exposition de l'arène de test). Ils sont marqués comme défauts
   connus dans `tests/lightbake.test.ts`.
-- Les modèles de joueurs et d'armes sont volontairement simples (formes géométriques).
+- Les modèles de joueurs sont encore simples (formes géométriques) ; les armes sont détaillées mais procédurales.
+- La visée à l'épaule est visuelle (zoom et alignement du viseur) : elle ne modifie pas la précision calculée par le serveur.
 - Jeu pensé pour PC (clavier et souris) ; pas de version mobile.
 
 ## Marque et contenus
