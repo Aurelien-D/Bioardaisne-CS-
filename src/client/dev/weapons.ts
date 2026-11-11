@@ -14,6 +14,7 @@
  *   ?src=<url>                     raw mode: any glTF / GLB as authored (no placement), fitted to
  *                                  the window, four views with the SOURCE axes — used to work out
  *                                  the placement of a new model
+ *   ?src=<url>&pane=x|y|z|p        raw mode, one of the four views only (from +X, +Y, +Z, perspective)
  *
  * Markers: X red, Y green, Z blue (20 cm each, from the origin), 10 cm grid (50 cm lines brighter),
  * spheres at the origin (white), muzzle (red), sight (green) and gripLeft (blue).
@@ -411,7 +412,14 @@ async function showRaw(url: string): Promise<void> {
   cam.lookAt(center);
   const p = perspPane(cam, [0.5, 0, 0.5, 0.5]);
   p.title = 'perspective depuis (+X, +Y, +Z)';
-  panes.push(x, z, y, p);
+  const all: Record<string, Pane> = { x, y, z, p };
+  const single = all[params.get('pane') ?? ''];
+  if (single) {
+    single.rect = [0, 0, 1, 1];
+    panes.push(single);
+  } else {
+    panes.push(x, z, y, p);
+  }
   for (const pane of panes) {
     pane.tags.push({ text: '+X', at: new THREE.Vector3(reach * 0.25, 0, 0), color: '#ff8080' });
     pane.tags.push({ text: '+Y', at: new THREE.Vector3(0, reach * 0.25, 0), color: '#80ff90' });
