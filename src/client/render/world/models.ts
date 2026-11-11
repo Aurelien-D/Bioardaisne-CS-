@@ -38,7 +38,31 @@ const MODEL_BAKED = `
 	#endif
 `;
 
-function patchMaterial(material: THREE.Material, keepColor = false): void {
+/** Shared clock of the animated models. */
+const modelTime = { value: 0 };
+/** Assets whose crown moves in the wind. */
+const WIND = new Set(['street_tree']);
+/**
+ * Wind: the vertex is displaced in world space (instances sit at the scene origin), more
+ * the higher it is above the ground; a slow sway of the whole crown plus a faster leaf flutter.
+ */
+const WIND_VERTEX = /* glsl */ `
+	vec4 mvPosition = vec4( transformed, 1.0 );
+	#ifdef USE_INSTANCING
+		mvPosition = instanceMatrix * mvPosition;
+	#endif
+	mvPosition = modelMatrix * mvPosition;
+	{
+		float basH = clamp( ( mvPosition.y - 2.2 ) / 4.0, 0.0, 1.0 );
+		float basPh = mvPosition.x * 0.35 + mvPosition.z * 0.27;
+		mvPosition.x += sin( basModelTime * 1.1 + basPh ) * 0.07 * basH * basH + sin( basModelTime * 3.9 + basPh * 5.0 + mvPosition.y * 2.3 ) * 0.014 * basH;
+		mvPosition.z += cos( basModelTime * 0.9 + basPh * 1.3 ) * 0.055 * basH * basH + cos( basModelTime * 4.3 + basPh * 4.0 + mvPosition.y * 1.9 ) * 0.012 * basH;
+	}
+	mvPosition = viewMatrix * mvPosition;
+	gl_Position = projectionMatrix * mvPosition;
+`;
+
+function patchMaterial(material: THREE.Material, keepColor = false, wind = false): void {
   if (material.userData.basModel) return;
   material.userData.basModel = true;
   const std = material as THREE.MeshStandardMaterial;
@@ -56,8 +80,12 @@ function patchMaterial(material: THREE.Material, keepColor = false): void {
       .replace('#include <color_fragment>', '') // the instance colour is light, not paint
       .replace('#include <lights_fragment_begin>', MODEL_LIGHTS_BEGIN)
       .replace('#include <lights_fragment_maps>', MODEL_BAKED + MODEL_LIGHTS_MAPS);
+    if (wind) {
+      shader.uniforms.basModelTime = modelTime;
+      shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform float basModelTime;').replace('#include <project_vertex>', WIND_VERTEX);
+    }
   };
-  material.customProgramCacheKey = () => 'bas-model';
+  material.customProgramCacheKey = () => (wind ? 'bas-model-wind' : 'bas-model');
 }
 
 interface GltfJson {
@@ -115,6 +143,8 @@ export interface MapModels {
   group: THREE.Group;
   /** Resolves when every model has arrived (or failed); models are added to `group` as they come. */
   done: Promise<void>;
+  /** Per-frame animation (wind in the trees). */
+  update(timeSeconds: number): void;
   dispose(): void;
 }
 
@@ -163,13 +193,14 @@ export function buildMapModels(
       tpl.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;
-        for (const mm of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) patchMaterial(mm);
+        const wind = WIND.has(asset);
+        for (const mm of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) patchMaterial(mm, false, wind);
         let material = mesh.material;
         if (where === 'in' && interiorEnv) {
           const indoor = (src: THREE.Material): THREE.Material => {
             const copy = src.clone() as THREE.MeshStandardMaterial;
             copy.userData = {};
-            patchMaterial(copy, true);
+            patchMaterial(copy, true, wind);
             copy.envMap = interiorEnv;
             copy.envMapIntensity = 1;
             cloned.push(copy);
@@ -203,6 +234,9 @@ export function buildMapModels(
   return {
     group,
     done,
+    update(timeSeconds) {
+      modelTime.value = timeSeconds % 3600;
+    },
     dispose() {
       disposed = true;
       group.removeFromParent();
