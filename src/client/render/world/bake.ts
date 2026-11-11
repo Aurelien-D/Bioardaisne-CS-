@@ -52,8 +52,8 @@ interface QualitySettings {
 }
 
 const QUALITY: Record<BakeQuality, QualitySettings> = {
-  high: { density: 4, aoRays: 12, soft: true },
-  medium: { density: 3, aoRays: 8, soft: true },
+  high: { density: 6, aoRays: 20, soft: true },
+  medium: { density: 4, aoRays: 14, soft: true },
   low: { density: 2, aoRays: 0, soft: false },
 };
 

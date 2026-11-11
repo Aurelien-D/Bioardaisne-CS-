@@ -27,6 +27,7 @@ export const meta: MapMeta = {
 const H0 = 3.6; // ground-floor ceiling
 const F1 = 4.0; // upper-floor level
 const H1 = 7.0; // upper-floor ceiling (absolute)
+const ROAD = -0.12; // carriageway level, one kerb below the pavement
 
 export function build(): MapData {
   const b = new MapBuilder(meta, {
@@ -44,12 +45,26 @@ export function build(): MapData {
     fogFar: 190,
   });
 
-  const door = (at: number, width = 1.4, height = 2.2): Opening => ({ at, width, height });
+  const door = (at: number, width = 1.4, height = 2.2): Opening => ({ at, width, height, frame: 'metal_grey' });
+  /** Baie de vitrine (l'ancien magasin) : grand vitrage dans un cadre aluminium sombre. */
+  const shop = (at: number, width: number, fill: 'glass' | 'frosted' = 'glass'): Opening => ({ at, width, height: 2.55, sill: 0.35, fill, frame: 'metal_dark' });
   const win = (at: number, width = 2, sill = 0.9, height = 1.5): Opening => ({ at, width, height, sill, fill: 'glass', frame: 'metal_white' });
   /** Ground-floor wall. */
   /** `inner` = material of the interior face: [side, material] with side 'pos' (+X / +Z) or 'neg'. */
   const W = (x0: number, z0: number, x1: number, z1: number, mat: MaterialId, openings: Opening[] = [], height = H0, y = 0, inner?: ['pos' | 'neg', MaterialId]): void => {
-    wall(b, { x0, z0, x1, z1, y, height, thickness: 0.25, mat, openings, matPos: inner?.[0] === 'pos' ? inner[1] : undefined, matNeg: inner?.[0] === 'neg' ? inner[1] : undefined });
+    // Finitions intérieures : plinthe partout, bande de protection murale au rez-de-chaussée (locaux de soins).
+    const side = inner ? inner[0] : 'both';
+    wall(b, {
+      x0, z0, x1, z1, y, height, thickness: 0.25, mat, openings,
+      matPos: inner?.[0] === 'pos' ? inner[1] : undefined,
+      matNeg: inner?.[0] === 'neg' ? inner[1] : undefined,
+      skirting: { mat: 'plastic_grey', side, height: 0.1 },
+      bands: y === 0 && height > 2 ? [{ mat: 'plastic_grey', y: 0.86, height: 0.14, side, depth: 0.022 }] : [],
+    });
+  };
+  /** Détail décoratif sans collision. */
+  const D = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, mat: MaterialId): void => {
+    b.box(x0, y0, z0, x1, y1, z1, mat, { solid: false, detail: true });
   };
   const P = (id: string, x: number, z: number, q = 0, y = 0, anchor: 'center' | 'back' = 'center'): void => {
     placeProp(b, id, x, y, z, q, anchor);
@@ -62,18 +77,28 @@ export function build(): MapData {
   floor(b, { x0: -1, z0: 8, x1: 3, z1: 33, y: 0, thickness: 0.5, mat: 'gravel' }); // passage ouest
   floor(b, { x0: 31, z0: 8, x1: 36, z1: 17, y: 0, thickness: 0.5, mat: 'sidewalk' }); // courette
   floor(b, { x0: -1, z0: 33, x1: 46, z1: 36, y: 0, thickness: 0.5, mat: 'sidewalk' }); // trottoir
-  floor(b, { x0: -1, z0: 36, x1: 46, z1: 41, y: 0, thickness: 0.5, mat: 'asphalt' }); // contre-allée
+  floor(b, { x0: -1, z0: 36, x1: 46, z1: 41, y: ROAD, thickness: 0.5, mat: 'asphalt' }); // contre-allée, en contrebas du trottoir
+  D(-1, ROAD, 35.84, 46, 0.012, 36.03, 'stone_grey'); // bordure de trottoir
   // Murs d'enceinte (immeubles voisins)
   b.box(-1, 0, -1, 46, 9, 0, 'brick_red');
-  b.box(-1, 0, 40, 46, 9, 41, 'facade_cream', { faces: { nz: 'facade_cream' } });
-  b.box(-1, 0, 0, 0, 9, 40, 'facade_grey');
-  b.box(45, 0, 0, 46, 9, 40, 'brick_brown');
+  b.box(-1, -0.7, 40, 46, 9, 41, 'facade_cream', { faces: { nz: 'facade_cream' } });
+  b.box(-1, -0.7, 0, 0, 9, 40, 'facade_grey');
+  b.box(45, -0.7, 0, 46, 9, 40, 'brick_brown');
   b.box(42, 0, 8, 45, 9, 33, 'facade_grey'); // pignon voisin à l'est
   for (let i = 0; i < 7; i++) {
     b.box(3 + i * 6, 3.2, 40 - 0.02, 5 + i * 6, 5.6, 40, 'window_facade', { solid: false, detail: true });
     b.box(3 + i * 6, 6.2, 40 - 0.02, 5 + i * 6, 8.4, 40, 'window_facade', { solid: false, detail: true });
     b.box(3 + i * 6, 0.3, 40 - 0.02, 5.4 + i * 6, 2.7, 40, i % 2 ? 'shopfront' : 'shutter', { solid: false, detail: true });
+    // Appuis de fenêtre, linteaux et bandeau d'enseigne des immeubles d'en face
+    for (const wy of [3.2, 6.2]) {
+      D(2.9 + i * 6, wy - 0.12, 39.9, 5.1 + i * 6, wy, 40, 'stone_white');
+      D(2.95 + i * 6, wy + (wy < 4 ? 2.4 : 2.2), 39.94, 5.05 + i * 6, wy + (wy < 4 ? 2.52 : 2.32), 40, 'stone_white');
+    }
+    D(2.9 + i * 6, 2.7, 39.88, 5.5 + i * 6, 3.0, 40, i % 2 ? 'metal_dark' : 'metal_grey');
   }
+  D(-1, -0.12, 39.93, 46, 0.3, 40, 'stone_grey'); // soubassement d'en face
+  D(-1, 8.55, 39.82, 46, 8.8, 40, 'stone_white'); // corniche d'en face
+  D(-1, 5.82, 39.94, 46, 5.96, 40, 'stone_white'); // bandeau d'étage
 
   // =====================================================================================
   // Rez-de-chaussée : sols
@@ -91,8 +116,8 @@ export function build(): MapData {
   // Rez-de-chaussée : murs extérieurs
   // =====================================================================================
   // Façade sur rue (Z = 33) : vitrine de l'accueil, porche, dépôt
-  W(3, 33, 18, 33, 'facade_cream', [win(3, 2.6, 1.1, 1.6), win(7.5, 2.6, 1.1, 1.6), win(12, 2.6, 1.1, 1.6)], 5.4, 0, ['neg', 'plaster_green']);
-  W(18, 33, 31, 33, 'facade_cream', [win(2.2, 3, 0.5, 2.3), door(6.5, 2.5, 2.4), win(10.8, 3, 0.5, 2.3)], H0, 0, ['neg', 'plaster_white']);
+  W(3, 33, 18, 33, 'facade_cream', [shop(2.9, 3.6, 'frosted'), shop(7.5, 3.6, 'frosted'), shop(12.1, 3.6, 'frosted')], 5.4, 0, ['neg', 'plaster_green']);
+  W(18, 33, 31, 33, 'facade_cream', [shop(2.4, 3.6), door(6.5, 2.5, 2.4), shop(10.6, 3.6)], H0, 0, ['neg', 'plaster_white']);
   W(36, 33, 42, 33, 'facade_cream', [door(2.5, 1.5)], 3.0, 0, ['neg', 'plaster_cream']);
   // Porche : ouvert sur la rue, porte double vers le hall en retrait (Z = 30)
   W(31, 30, 36, 30, 'plaster_white', [door(2.5, 2.2, 2.4)]);
@@ -133,7 +158,28 @@ export function build(): MapData {
 
   // Poteaux du plateau et de l'accueil
   for (const [px, pz] of [[8, 21], [13, 21], [8, 28], [13, 28], [24.5, 25], [24.5, 29.5]] as const) {
-    b.box(px - 0.25, 0, pz - 0.25, px + 0.25, px < 18 ? 5 : H0, pz + 0.25, 'concrete');
+    b.box(px - 0.25, 0, pz - 0.25, px + 0.25, px < 18 ? 5 : H0, pz + 0.25, 'plaster_white');
+    D(px - 0.27, 0, pz - 0.27, px + 0.27, 0.1, pz + 0.27, 'plastic_grey'); // plinthe
+    D(px - 0.265, 0.86, pz - 0.265, px + 0.265, 1.0, pz + 0.265, 'plastic_grey'); // protection d'angle
+  }
+
+  // Façade sur rue : soubassement en pierre, bandeau d'étage, corniches, auvent, descentes d'eau
+  for (const [xa, xb] of [[3, 23.25], [25.75, 31], [36, 37.75], [39.25, 42]] as const) D(xa, 0, 33.125, xb, 0.35, 33.175, 'stone_grey');
+  D(18, 3.58, 33.125, 36, 3.8, 33.21, 'stone_white');
+  D(3, 5.22, 33.125, 18, 5.45, 33.25, 'stone_white');
+  D(18, 6.8, 33.125, 36, 7.05, 33.25, 'stone_white');
+  D(36, 2.82, 33.125, 42, 3.05, 33.23, 'stone_white');
+  D(22.9, 2.62, 33.125, 26.1, 2.7, 34.25, 'metal_dark'); // auvent de l'entrée
+  D(22.9, 2.7, 33.125, 22.94, 3.2, 34.2, 'metal_dark');
+  D(26.06, 2.7, 33.125, 26.1, 3.2, 34.2, 'metal_dark');
+  for (const px of [18.02, 35.9]) D(px, 0, 33.125, px + 0.1, 6.8, 33.225, 'metal_dark');
+  for (const lx of [22.65, 26.25]) D(lx, 2.05, 33.125, lx + 0.12, 2.35, 33.2, 'light_warm'); // appliques de l'entrée
+  b.light(24.5, 2.3, 34.1, 0xffe2b8, 0.7, 6);
+  // Façade arrière : soubassement béton, appliques au-dessus des portes
+  for (const [xa, xb] of [[3, 11.9], [14.1, 23.3], [24.7, 31], [36, 38.3], [39.7, 42]] as const) D(xa, 0, 7.84, xb, 0.3, 7.875, 'concrete');
+  for (const lx of [13, 24, 39]) {
+    D(lx - 0.18, 2.55, 7.78, lx + 0.18, 2.67, 7.875, 'light_warm');
+    b.light(lx, 2.4, 7.3, 0xffe2b8, 0.6, 6);
   }
 
   // =====================================================================================
@@ -359,14 +405,17 @@ export function build(): MapData {
   }
   /** Parked car, nose toward +X: `cabin` = [rear, front] of the glasshouse along the car, `half` = half body width. */
   const car = (asset: string, x: number, z: number, half: number, length: number, cabin: [number, number]): void => {
-    b.at(x, 0, z, 1, (m) => {
+    b.at(x, ROAD, z, 1, (m) => {
       m.model(asset, 0, 0, 0);
       m.collider(-half, 0, -length / 2, half, 0.9, length / 2, 'metal');
       m.collider(-half + 0.1, 0.9, cabin[0], half - 0.1, 1.32, cabin[1], 'glass');
     });
   };
   car('car_wagon', 9.5, 38.4, 0.87, 4.38, [-2.1, 1.0]);
-  car('car_sedan', 18.5, 38.6, 0.87, 4.36, [-1.4, 1.0]);
+  car('car_sedan', 20.7, 38.6, 0.87, 4.36, [-1.4, 1.0]);
+  // Stationnement en long : ligne continue et séparations des places
+  D(0, ROAD, 37.44, 45, ROAD + 0.006, 37.56, 'plastic_white');
+  for (let bx = 1.1; bx < 45; bx += 5.6) D(bx - 0.06, ROAD, 37.56, bx + 0.06, ROAD + 0.006, 39.9, 'plastic_white');
   car('car_hatchback', 37, 38.4, 0.84, 3.96, [-1.8, 1.0]);
   // Abribus vitré (ouvert vers la chaussée), corbeille, armoire électrique
   b.model('bus_shelter', 28.5, 0, 35.06);
@@ -384,7 +433,7 @@ export function build(): MapData {
   // Signalétique
   // =====================================================================================
   b.sign({ x: 24.5, y: 3.25, z: 33.14, facing: 0, w: 9, h: 0.6, text: 'LABORATOIRE DE BIOLOGIE MÉDICALE', style: 'shop', bg: 0x6f8496, color: 0xffffff });
-  b.sign({ x: 20.2, y: 2.2, z: 33.14, facing: 0, w: 1.6, h: 1.1, text: 'bio ard’aisne', sub: 'LABORATOIRE', style: 'plaque', icon: 'logo', bg: 0xffffff, color: 0x4a4a49 });
+  b.sign({ x: 26.3, y: 1.7, z: 33.14, facing: 0, w: 0.9, h: 0.62, text: 'bio ard’aisne', sub: 'LABORATOIRE', style: 'plaque', icon: 'logo', bg: 0xffffff, color: 0x4a4a49 });
   b.sign({ x: 33.5, y: 2.75, z: 30.14, facing: 0, w: 2.2, h: 0.4, text: 'Entrée du personnel', style: 'door' });
   b.sign({ x: 10.5, y: 3.3, z: 14.86, facing: 2, w: 3, h: 0.5, text: 'PLATEAU TECHNIQUE', sub: 'Accès réservé au personnel habilité', style: 'plaque' });
   b.sign({ x: 17.86, y: 2.6, z: 20.5, facing: 3, w: 1.8, h: 0.35, text: 'Prélèvements', style: 'door', icon: 'arrow_right' });
@@ -397,7 +446,7 @@ export function build(): MapData {
   b.sign({ x: 30.86, y: 1.8, z: 28, facing: 3, w: 1.1, h: 1.5, text: 'À jeun ?', sub: 'Glycémie : 8 h sans manger. Le croissant attendra.', style: 'poster', icon: 'tube' });
   b.sign({ x: 18.14, y: 1.8, z: 30.5, facing: 1, w: 1.1, h: 1.5, text: 'Tube hémolysé', sub: 'Ni repris, ni échangé. Merci de votre compréhension.', style: 'poster', icon: 'tube' });
   b.sign({ x: 3.14, y: 2.2, z: 24, facing: 1, w: 1.4, h: 1, text: 'Automate en calibration', sub: 'Ne pas déranger (lui non plus)', style: 'poster' });
-  b.sign({ x: 12, y: 2.2, z: 32.86, facing: 2, w: 1.6, h: 1, text: 'Contrôle qualité', sub: 'Passé ce matin. Promis.', style: 'poster' });
+  b.sign({ x: 12, y: 3.6, z: 32.86, facing: 2, w: 1.6, h: 1, text: 'Contrôle qualité', sub: 'Passé ce matin. Promis.', style: 'poster' });
   b.sign({ x: 39, y: 2.2, z: 8.14, facing: 0, w: 1.6, h: 0.4, text: 'Salle de repos', style: 'door' });
   b.sign({ x: 41.86, y: 1.7, z: 14, facing: 3, w: 1.2, h: 0.9, text: 'Frigo', sub: 'Yaourts ≠ échantillons', style: 'poster' });
   b.sign({ x: 39, y: 2.2, z: 32.86, facing: 2, w: 1.6, h: 0.4, text: 'Dépôt des échantillons', style: 'door' });
@@ -417,7 +466,7 @@ export function build(): MapData {
   // =====================================================================================
   for (let i = 0; i < 10; i++) {
     b.spawn(0, 3 + i * 3, 0.05, 1.2, 180); // Équipe Labo : cour arrière
-    b.spawn(1, 4.5 + i * 3.6, 0.05, i % 2 ? 36.5 : 37, 0); // Auditeurs : rue
+    b.spawn(1, 4.5 + i * 3.6, ROAD + 0.05, i % 2 ? 36.5 : 37, 0); // Auditeurs : rue
   }
   b.zone('site', 'A', 5, 0, 19.5, 17, 3, 32.5, 'Plateau technique');
   b.zone('site', 'B', 19, 0, 23, 30, 3, 32, 'Accueil');
