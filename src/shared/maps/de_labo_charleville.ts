@@ -324,19 +324,21 @@ export function build(): MapData {
   // Les objets de l'extérieur sont de vrais modèles 3D (maps/models.ts) posés avec b.model() ;
   // les collisions restent des boîtes invisibles, aux emplacements des anciens volumes.
   // Fourgon de la navette (cour) : fourgon blanc de 5 m, l'avant vers +X
-  b.at(24, 0, 3.4, 1, (m) => {
+  // Garé le long de la façade arrière, entre la porte de livraison et les fenêtres des bureaux :
+  // la cour reste dégagée devant les apparitions de l'Équipe Labo.
+  b.at(16.7, 0, 6.72, 1, (m) => {
     m.model('van', 0, 0, -0.05);
     m.collider(-1.02, 0, -2.55, 1.02, 2.25, 1.3, 'metal'); // caisse et cabine
     m.collider(-0.97, 0, 1.3, 0.97, 1.4, 2.45, 'metal'); // capot
   });
-  b.sign({ x: 22.8, y: 1.5, z: 4.42, facing: 0, w: 2.2, h: 0.7, text: 'bio ard’aisne', sub: 'Navette échantillons', style: 'plaque', icon: 'logo', bg: 0xffffff, color: 0x4a4a49 });
+  b.sign({ x: 15.6, y: 1.5, z: 5.68, facing: 2, w: 2.2, h: 0.7, text: 'bio ard’aisne', sub: 'Navette échantillons', style: 'plaque', icon: 'logo', bg: 0xffffff, color: 0x4a4a49 });
   // Bennes et palettes
   b.model('dumpster_b', 39.5, 0, 1.8);
   b.collider(38.17, 0, 1.12, 40.83, 1.3, 2.48, 'metal');
   b.model('dumpster_a', 35.25, 0, 1.8);
   b.collider(33.9, 0, 1.1, 36.6, 1.3, 2.5, 'metal');
   P('pallet_loaded', 6, 2.5, 0);
-  P('pallet_loaded', 14, 5.8, 1);
+  P('pallet_loaded', 9.6, 6.6, 1);
   P('carton_stack', 30, 6.9, 0);
   b.box(42.2, 0, 4.5, 44.6, 2.2, 7.6, 'brick_brown'); // local poubelles
   // Passage ouest : bacs roulants (trois gris contre le mur mitoyen, deux verts contre le pignon)

@@ -11,13 +11,14 @@ Aucune installation côté joueur : un navigateur récent sur PC (Chrome, Edge o
 | Élément | État |
 |---|---|
 | Déplacements « Source » (ZQSD, saut, accroupi, marche silencieuse), collisions | ✅ |
-| 8 armes originales (recul, dispersion, rechargement, lunette) | ✅ |
+| 8 armes (recul, dispersion, rechargement, visée à l'épaule, lunette) en vrais modèles 3D tenus à deux mains | ✅ |
 | Bots (4 niveaux de difficulté), jeu solo sans serveur | ✅ |
 | Multijoueur : salons privés (code et lien d'invitation), serveur autoritaire, chat, tableau des scores | ✅ |
 | Mode **Match à mort par équipe** en manches | ✅ |
 | Carte `de_labo_charleville` (inspirée du site du cours Briand) | ✅ |
 | Menus, options (souris, vidéo, audio, viseur, touches), HUD complet, audio procédural | ✅ |
-| Rendu réaliste : matériaux physiques, soleil et ombres dynamiques, bloom, tonemapping filmique | ✅ |
+| Rendu réaliste : matériaux physiques photographiés, ciel HDR, soleil et ombres dynamiques, occlusion ambiante, bloom, tonemapping filmique | ✅ |
+| Personnages animés, mobilier, véhicules et arbres en vrais modèles 3D (sous licence libre, voir plus bas) | ✅ |
 | Cartes `de_rethel` et `de_charleville` | ⏳ à faire |
 | Modes **Audit surprise** (désamorçage) et **Sécurisation du laboratoire** | ⏳ à faire (désactivés dans les menus ; zones et points déjà posés sur la carte) |
 
@@ -154,7 +155,9 @@ Collisions, rendu, éclairage et navigation des bots sont dérivés automatiquem
 ### Ajouter une arme
 
 1. Ajoutez son identifiant et sa fiche dans `src/shared/weapons/defs.ts`.
-2. Ajoutez son modèle dans `src/client/render/weapons/models.ts` et son timbre dans `src/client/audio/sounds/weapons.ts`.
+2. Ajoutez son modèle dans `src/client/render/weapons/models.ts` (version simplifiée) et, pour un vrai modèle 3D,
+   un dossier `public/media/models/weapons/<id>/` déclaré dans `src/client/render/weapons/assets.ts` ;
+   ajoutez son timbre dans `src/client/audio/sounds/weapons.ts`.
 
 ## Limites connues
 
@@ -162,7 +165,8 @@ Collisions, rendu, éclairage et navigation des bots sont dérivés automatiquem
 - Éclairage précalculé : trois contrôles de qualité ne sont pas encore atteints (raccord de lumière entre deux
   dalles de sol, soleil à travers une vitre, exposition de l'arène de test). Ils sont marqués comme défauts
   connus dans `tests/lightbake.test.ts`.
-- Les modèles de joueurs sont encore simples (formes géométriques) ; les armes sont détaillées mais procédurales.
+- Une partie du mobilier de laboratoire (automates, paillasses, hottes) reste modélisée par le code, faute de modèles libres convaincants.
+- En qualité « basse », les modèles 3D d'armes et de personnages sont remplacés par leurs versions simplifiées.
 - La visée à l'épaule est visuelle (zoom et alignement du viseur) : elle ne modifie pas la précision calculée par le serveur.
 - Jeu pensé pour PC (clavier et souris) ; pas de version mobile.
 
@@ -179,4 +183,10 @@ Assets tiers du dossier `public/media/` :
 | Textures photographiques d'intérieur (`media/tex/` : plafond, terrazzo, moquette, métal, bois) | [ambientCG](https://ambientcg.com) | CC0 (domaine public) |
 | Personnage animé (`media/models/soldier.json`, converti depuis `Soldier.glb`) | Exemples de [three.js](https://github.com/mrdoob/three.js), personnage « Vanguard » issu de Mixamo | Conditions d'utilisation Mixamo / Adobe (usage libre dans un projet, **pas CC0**) — à remplacer si le jeu devait être diffusé publiquement |
 
-Le reste — armes, mobilier, sons, textures secondaires — est généré par le code ; aucun élément n'est repris d'un jeu existant.
+| Armes (`media/models/weapons/`) : 7 modèles Sketchfab (via Objaverse), 1 modèle Poly Haven | Auteurs et liens dans [`public/media/credits-weapons.md`](public/media/credits-weapons.md) | CC BY 4.0 (7) et CC0 (1) |
+| Mobilier, véhicules, arbres, mobilier urbain (`media/models/props/`, 44 modèles) | Auteurs et liens dans [`public/media/credits-props.md`](public/media/credits-props.md) | CC BY 4.0 et CC0 |
+
+Les modèles sous **CC BY** imposent de citer leurs auteurs : les deux fichiers de crédits doivent accompagner toute
+diffusion du jeu. Aucun modèle « non commercial », « sans modification » ou sans licence explicite n'est utilisé.
+
+Le reste — mobilier de laboratoire, sons, textures secondaires — est généré par le code ; aucun élément n'est repris d'un jeu existant.
