@@ -7,23 +7,40 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { WeaponId } from '../../../shared/weapons/defs';
-import { getWeaponAsset } from './assets';
+import { getWeaponAsset, type LensSpec, type WeaponViewSpec } from './assets';
+import { createHoloSight, createLens, createLensMask, lensHandle, type HoloSight, type Lens } from './optics';
 
 export interface WeaponModel {
   root: THREE.Group;
   /** Empty object at the barrel tip. */
   muzzle: THREE.Object3D;
-  /** Point of the sight line near the shooter's eye (aim-down-sights alignment). */
+  /**
+   * Point of the sight line near the shooter's eye (aim-down-sights alignment): centre of the
+   * eyepiece / window of an optic, top of the rear notch of iron sights.
+   */
   sight: THREE.Object3D;
-  /** Movable pieces (slide / bolt / magazine / pump). */
+  /** Iron sights: tip of the front sight. The line sight → sightFront is the line of aim. */
+  sightFront: THREE.Object3D | null;
+  /** Movable pieces (slide / bolt / magazine / pump), each at its rest position. */
   parts: Record<string, THREE.Object3D>;
   /** Hand anchors. */
   gripRight: THREE.Object3D;
   gripLeft: THREE.Object3D;
+  /** First-person presentation data (aiming distance, ejection port, magazine). */
+  view: WeaponViewSpec;
+  /**
+   * 'view' models own their materials (the view model follows the light around the player);
+   * 'world' models share those of the asset and leave this list empty.
+   */
+  materials: THREE.MeshStandardMaterial[];
+  /** Lens glass of the optics (the view model drives their light level). */
+  lenses: Lens[];
+  /** Built from a loaded 3D asset (false: procedural fallback). */
+  detailed: boolean;
   dispose(): void;
 }
 
-type Mat = 'gunmetal' | 'steel' | 'polymer' | 'polymerDark' | 'wood' | 'woodDark' | 'rubber' | 'blue' | 'bakelite' | 'glass' | 'brass' | 'tan';
+type Mat = 'gunmetal' | 'steel' | 'polymer' | 'polymerDark' | 'wood' | 'woodDark' | 'rubber' | 'blue' | 'bakelite' | 'brass' | 'tan';
 
 const MATS: Record<Mat, THREE.MeshStandardMaterial> = {
   gunmetal: new THREE.MeshStandardMaterial({ color: 0x2c2f34, metalness: 0.75, roughness: 0.5 }),
@@ -35,31 +52,24 @@ const MATS: Record<Mat, THREE.MeshStandardMaterial> = {
   rubber: new THREE.MeshStandardMaterial({ color: 0x0c0c0d, metalness: 0, roughness: 0.95 }),
   blue: new THREE.MeshStandardMaterial({ color: 0x2f6fb5, metalness: 0.1, roughness: 0.5 }),
   bakelite: new THREE.MeshStandardMaterial({ color: 0x8a3d14, metalness: 0.1, roughness: 0.4 }),
-  glass: new THREE.MeshStandardMaterial({ color: 0x9fc4d8, metalness: 0.2, roughness: 0.05, transparent: true, opacity: 0.22 }),
   brass: new THREE.MeshStandardMaterial({ color: 0xc9a23a, metalness: 1, roughness: 0.3 }),
   tan: new THREE.MeshStandardMaterial({ color: 0x8c7a5c, metalness: 0.05, roughness: 0.75 }),
 };
 
-let reticleTex: THREE.Texture | null = null;
-function reticleTexture(): THREE.Texture {
-  if (reticleTex) return reticleTex;
-  const c = document.createElement('canvas');
-  c.width = c.height = 128;
-  const g = c.getContext('2d')!;
-  g.strokeStyle = 'rgba(255,40,30,0.95)';
-  g.fillStyle = 'rgba(255,40,30,1)';
-  g.lineWidth = 5;
-  g.beginPath();
-  g.arc(64, 64, 34, 0, Math.PI * 2);
-  g.stroke();
-  g.beginPath();
-  g.arc(64, 64, 5, 0, Math.PI * 2);
-  g.fill();
-  for (const [x, y] of [[64, 18], [64, 110], [18, 64], [110, 64]] as const) g.fillRect(x - 2.5, y - 8, 5, 16);
-  reticleTex = new THREE.CanvasTexture(c);
-  reticleTex.colorSpace = THREE.SRGBColorSpace;
-  return reticleTex;
-}
+/** Named parts of the 3D assets (see assets.ts) that the view model animates. */
+const PART_NAMES = ['slide', 'magazine', 'bolt', 'pump'];
+
+/** First-person data of the procedural models. */
+const PROC_VIEW: Record<WeaponId, WeaponViewSpec> = {
+  knife: { adsDist: 0.2, eject: null, mag: null },
+  pistol: { adsDist: 0.23, eject: [0.016, 0.05, -0.04], mag: [0, -0.1, 0.055] },
+  deagle: { adsDist: 0.24, eject: [0.02, 0.055, -0.04], mag: [0, -0.11, 0.06] },
+  smg: { adsDist: 0.11, eject: [0.028, 0.05, -0.1], mag: [0, -0.13, -0.13] },
+  rifle_ak: { adsDist: 0.17, eject: [0.026, 0.045, -0.13], mag: [0, -0.15, -0.16] },
+  rifle_m4: { adsDist: 0.11, eject: [0.024, 0.05, -0.1], mag: [0, -0.15, -0.135] },
+  shotgun: { adsDist: 0.15, eject: [0.022, 0.035, -0.08], mag: [0, 0, -0.12] },
+  sniper: { adsDist: 0.07, eject: [0.03, 0.055, -0.03], mag: [0, 0.07, -0.1] },
+};
 
 class Builder {
   root = new THREE.Group();
@@ -102,23 +112,22 @@ class Builder {
     const n = Math.floor(len / 0.01);
     for (let i = 0; i < n; i += 1) this.box(width, 0.005, 0.0052, x, y - 0.0015, z0 - 0.005 - i * 0.01, mat);
   }
-  /** Holographic sight sitting on a rail at height y, centred on z. Returns the reticle mesh. */
-  holo(y: number, z: number): THREE.Mesh {
-    this.box(0.034, 0.014, 0.07, 0, y + 0.007, z, 'polymer');
-    this.box(0.004, 0.04, 0.05, -0.02, y + 0.034, z - 0.006, 'gunmetal');
-    this.box(0.004, 0.04, 0.05, 0.02, y + 0.034, z - 0.006, 'gunmetal');
-    this.box(0.044, 0.004, 0.05, 0, y + 0.056, z - 0.006, 'gunmetal');
-    this.box(0.034, 0.02, 0.016, 0, y + 0.02, z + 0.028, 'polymer');
-    this.box(0.036, 0.036, 0.0015, 0, y + 0.036, z - 0.025, 'glass');
-    const ret = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.02, 0.02),
-      new THREE.MeshBasicMaterial({ map: reticleTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
-    );
-    ret.position.set(0, y + 0.036, z - 0.024);
-    ret.renderOrder = 5;
-    this.root.add(ret);
-    this.made.push(ret.geometry);
-    return ret;
+  lenses: Lens[] = [];
+  private holos: HoloSight[] = [];
+  /**
+   * Holographic sight sitting on a rail whose top is at height y, centred on z; its glass
+   * carries the ring-and-dot reticle (first person only). Returns the centre of the window.
+   */
+  holo(y: number, z: number, reticle: boolean): [number, number, number] {
+    const h = createHoloSight(reticle);
+    h.group.position.set(0, y, z);
+    this.root.add(h.group);
+    this.holos.push(h);
+    this.lenses.push(h.lens);
+    return [h.window[0], y + h.window[1], z + h.window[2]];
+  }
+  disposeExtras(): void {
+    for (const h of this.holos) h.dispose();
   }
   group(name: string, x = 0, y = 0, z = 0): void {
     const g = new THREE.Group();
@@ -158,31 +167,83 @@ function gripAndTrigger(b: Builder, mat: Mat, h = 0.1, z = 0.03): void {
   b.box(0.006, 0.022, 0.006, 0, -0.018, z - 0.04, 'steel', -0.35);
 }
 
-export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view'): WeaponModel {
+export function createWeaponModel(id: WeaponId, lod: 'view' | 'world' = 'view'): WeaponModel {
   // A real 3D model when one is loaded (see assets.ts); the procedural model otherwise.
   const asset = getWeaponAsset(id);
   if (asset) {
     const root = new THREE.Group();
-    root.add(asset.scene.clone(true));
+    const scene = asset.scene.clone(true);
+    root.add(scene);
     const anchor = (p: [number, number, number]): THREE.Object3D => {
       const o = new THREE.Object3D();
       o.position.set(p[0], p[1], p[2]);
       root.add(o);
       return o;
     };
+    const parts: Record<string, THREE.Object3D> = {};
+    for (const name of PART_NAMES) {
+      const part = scene.getObjectByName(name);
+      if (part) parts[name] = part;
+    }
+    const materials: THREE.MeshStandardMaterial[] = [];
+    const lenses: Lens[] = [];
+    const owned: { dispose(): void }[] = [];
+    if (lod === 'view') {
+      // Own material instances (textures stay shared): the view model follows the local light.
+      const copies = new Map<THREE.Material, THREE.Material>();
+      const eyeLenses: THREE.Mesh[] = [];
+      scene.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh || Array.isArray(mesh.material)) return;
+        if (mesh.userData.lens && (mesh.userData.lens as LensSpec).eye) {
+          eyeLenses.push(mesh);
+          return;
+        }
+        let copy = copies.get(mesh.material);
+        if (!copy) {
+          copy = mesh.material.clone();
+          copies.set(mesh.material, copy);
+          owned.push(copy);
+          if ((copy as THREE.MeshStandardMaterial).isMeshStandardMaterial) materials.push(copy as THREE.MeshStandardMaterial);
+          else if ((copy as THREE.ShaderMaterial).isShaderMaterial) lenses.push(lensHandle(mesh, copy as THREE.ShaderMaterial));
+        }
+        mesh.material = copy;
+      });
+      // The lens the shooter looks through becomes a see-through sight with its reticle.
+      for (const mesh of eyeLenses) {
+        const spec = mesh.userData.lens as LensSpec;
+        const parent = mesh.parent ?? scene;
+        parent.remove(mesh);
+        const lens = createLens({ ...spec, open: true });
+        parent.add(lens.mesh);
+        if (spec.aperture) parent.add(createLensMask(lens.mesh));
+        lenses.push(lens);
+        owned.push(lens.mesh.geometry, lens.material);
+      }
+    }
     return {
       root,
       muzzle: anchor(asset.muzzle),
       sight: anchor(asset.sight),
-      parts: {},
+      sightFront: asset.sightFront ? anchor(asset.sightFront) : null,
+      parts,
       gripRight: anchor([0, -0.05, 0.03]),
       gripLeft: anchor(asset.gripLeft),
-      dispose: () => undefined, // geometry and textures belong to the shared asset
+      view: asset.view,
+      materials,
+      lenses,
+      detailed: true,
+      dispose: () => {
+        // Geometry and textures belong to the shared asset; only the view copies are ours.
+        for (const o of owned) o.dispose();
+      },
     };
   }
   const b = new Builder();
+  const view = lod === 'view';
   let muzzle: [number, number, number] = [0, 0.05, -0.2];
   let sight: [number, number, number] = [0, 0.08, 0];
+  let front: [number, number, number] | null = null;
   let left: [number, number, number] = [0, -0.02, -0.12];
 
   switch (id) {
@@ -217,7 +278,8 @@ export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view')
       b.box(0.026, 0.008, 0.036, 0, -0.05, 0.016, 'polymerDark', 0.3);
       b.end();
       muzzle = [0, 0.049, -0.16];
-      sight = [0, 0.0665, 0.03];
+      sight = [0, 0.067, 0.028];
+      front = [0, 0.067, -0.132];
       left = [0, -0.05, 0.03];
       break;
     }
@@ -239,7 +301,8 @@ export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view')
       b.box(0.024, 0.11, 0.034, 0, 0, 0, 'gunmetal', 0.3);
       b.end();
       muzzle = [0, 0.052, -0.235];
-      sight = [0, 0.0745, 0.035];
+      sight = [0, 0.0735, 0.038];
+      front = [0, 0.086, -0.215];
       left = [0, -0.055, 0.03];
       break;
     }
@@ -253,7 +316,7 @@ export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view')
       b.tube(0.0085, 0.1, 0, 0.045, -0.43, 'gunmetal');
       b.tube(0.012, 0.03, 0, 0.045, -0.475, 'gunmetal', 10);
       b.rail(0.076, 0.03, -0.2);
-      b.holo(0.076, -0.06);
+      sight = b.holo(0.076, -0.07, view);
       b.box(0.012, 0.03, 0.012, 0, 0.08, -0.38, 'gunmetal');
       b.box(0.022, 0.028, 0.2, 0, 0.04, 0.16, 'gunmetal');
       b.box(0.03, 0.09, 0.03, 0, 0.02, 0.27, 'rubber');
@@ -265,7 +328,6 @@ export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view')
       b.box(0.012, 0.01, 0.03, 0, 0, 0, 'steel');
       b.end();
       muzzle = [0, 0.045, -0.49];
-      sight = [0, 0.112, 0.0];
       left = [0, 0.0, -0.3];
       break;
     }
@@ -294,7 +356,8 @@ export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view')
       b.tube(0.005, 0.02, 0.012, 0, 0.002, 'steel');
       b.end();
       muzzle = [0, 0.038, -0.83];
-      sight = [0, 0.1, -0.2];
+      sight = [0, 0.0945, -0.235];
+      front = [0, 0.1, -0.74];
       left = [0, 0.0, -0.33];
       break;
     }
@@ -317,7 +380,7 @@ export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view')
       b.box(0.02, 0.026, 0.03, 0, 0.056, -0.52, 'gunmetal'); // gas block
       b.tube(0.011, 0.045, 0, 0.05, -0.7, 'gunmetal', 10); // flash hider
       b.tube(0.012, 0.006, 0, 0.05, -0.676, 'steel', 10);
-      b.holo(0.082, -0.07);
+      sight = b.holo(0.082, -0.075, view);
       b.box(0.014, 0.022, 0.012, 0, 0.093, -0.455, 'gunmetal'); // folded front sight
       b.box(0.02, 0.012, 0.03, 0, 0.088, -0.005, 'gunmetal'); // folded rear sight
       b.tube(0.014, 0.19, 0, 0.045, 0.115, 'gunmetal', 10); // buffer tube
@@ -334,7 +397,6 @@ export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view')
       b.box(0.004, 0.016, 0.06, 0, 0, 0, 'steel');
       b.end();
       muzzle = [0, 0.05, -0.73];
-      sight = [0, 0.118, 0.0];
       left = [0, 0.005, -0.33];
       break;
     }
@@ -353,7 +415,8 @@ export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view')
       for (let i = 0; i < 6; i++) b.tube(0.0255, 0.006, 0, 0, -0.055 + i * 0.022, 'wood', 10);
       b.end();
       muzzle = [0, 0.048, -0.7];
-      sight = [0, 0.068, 0.02];
+      sight = [0, 0.0665, -0.03];
+      front = [0, 0.0672, -0.69];
       left = [0, 0.0, -0.36];
       break;
     }
@@ -397,11 +460,17 @@ export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view')
     root: b.root,
     muzzle: b.anchor(...muzzle),
     sight: b.anchor(...sight),
+    sightFront: front ? b.anchor(...front) : null,
     parts: b.parts,
     gripRight: b.anchor(0, -0.05, 0.03),
     gripLeft: b.anchor(...left),
+    view: PROC_VIEW[id],
+    materials: [],
+    lenses: b.lenses,
+    detailed: false,
     dispose: () => {
       for (const g of made) g.dispose();
+      b.disposeExtras();
     },
   };
 }

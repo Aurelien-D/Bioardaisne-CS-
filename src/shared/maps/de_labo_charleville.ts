@@ -240,7 +240,8 @@ export function build(): MapData {
   P('coffee_table', 6, 11.5, 0, F1);
   P('visitor_chair', 5, 11.5, 1, F1);
   P('visitor_chair', 7, 11.5, 3, F1);
-  b.box(13, F1, 13.2, 15.5, F1 + 1.0, 14.2, 'metal_grey'); // groupe de ventilation (couvert)
+  b.model('ac_rooftop', 14.2, F1, 13.6); // groupe de climatisation (couvert)
+  b.collider(13.35, F1, 12.95, 15.05, F1 + 1.0, 14.25, 'metal');
 
   // =====================================================================================
   // Éclairage
@@ -512,7 +513,7 @@ export function build(): MapData {
   b.collider(38.17, 0, 1.12, 40.83, 1.3, 2.48, 'metal');
   b.model('dumpster_a', 35.25, 0, 1.8);
   b.collider(33.9, 0, 1.1, 36.6, 1.3, 2.5, 'metal');
-  P('pallet_loaded', 6, 2.5, 0);
+  P('pallet_loaded', 4.6, 4.4, 0);
   P('pallet_loaded', 9.6, 6.6, 1);
   P('carton_stack', 30, 6.9, 0);
   b.box(42.2, 0, 4.5, 44.6, 2.2, 7.6, 'brick_brown'); // local poubelles
@@ -546,6 +547,8 @@ export function build(): MapData {
   D(0, ROAD, 37.44, 45, ROAD + 0.006, 37.56, 'plastic_white');
   for (let bx = 1.1; bx < 45; bx += 5.6) D(bx - 0.06, ROAD, 37.56, bx + 0.06, ROAD + 0.006, 39.9, 'plastic_white');
   car('car_hatchback', 37, 38.4, 0.84, 3.96, [-1.8, 1.0]);
+  car('car_compact', 31.9, 38.5, 0.8, 3.26, [-1.3, 0.6]);
+  car('car_suv', 3.9, 38.6, 1.03, 4.61, [-1.9, 0.9]);
   // Abribus vitré (ouvert vers la chaussée), corbeille, armoire électrique
   b.model('bus_shelter', 28.5, 0, 35.06);
   b.collider(26.46, 0.2, 34.22, 30.54, 2.4, 34.28, 'glass'); // fond vitré
@@ -557,6 +560,57 @@ export function build(): MapData {
   b.collider(30.9, 0, 34.35, 31.4, 0.95, 34.85, 'metal');
   b.model('utility_box', 43.5, 0, 33.23);
   b.collider(43.24, 0, 33, 43.76, 1.12, 33.45, 'metal');
+
+  // Habillage extérieur : climatiseurs, descentes d'eau, potelets, vélos, banc, deux-roues, chantier de livraison
+  for (const [ax, ay] of [[16.6, 2.5], [25.6, 2.5], [37.2, 1.9]] as const) b.model('ac_outdoor', ax, ay, 7.875, 180);
+  b.model('drain_pipe', 3.25, 0, 7.875, 180);
+  b.model('drain_pipe', 30.8, 0, 7.875, 180);
+  b.model('drain_pipe', 2.875, 0, 20, -90);
+  for (const bx of [19.8, 21.3, 37.6, 40.2]) {
+    b.model('bollard', bx, 0, 35.62);
+    b.collider(bx - 0.11, 0, 35.51, bx + 0.11, 1.0, 35.73, 'metal');
+  }
+  b.model('bike_rack', 16, 0, 34.0);
+  b.model('bicycle', 15.7, 0, 34.12, 90);
+  b.collider(15, 0, 33.35, 17, 1.05, 34.95, 'metal');
+  b.model('park_bench', 9.6, 0, 35.2, 180);
+  b.collider(8.65, 0, 34.98, 10.55, 0.56, 35.42, 'wood');
+  b.model('scooter', 30.4, ROAD, 39.3, 90);
+  b.collider(29.55, ROAD, 38.95, 31.25, 1.1, 39.65, 'metal');
+  for (const [cx, cz] of [[13.6, 6.1], [19.9, 5.5], [20.1, 7.2]] as const) b.model('traffic_cone', cx, 0, cz);
+  b.model('garbage_bags', 37.4, 0, 2.9, 20);
+  b.model('trash_bag', 41.5, 0, 3.2, 70);
+  b.model('hand_truck', 5.7, 0, 5.0, 35);
+  b.model('metal_barrier', 1.4, 0, 29.5, 90);
+  b.collider(1.15, 0, 28.5, 1.65, 1.1, 30.5, 'metal');
+  b.model('plastic_chair', 32.2, 0, 10, 120);
+  b.model('plastic_chair', 33.4, 0, 9.4, -150);
+  b.model('ac_rooftop', 39, 3.05, 12.5, 90);
+  // Habillage intérieur : blocs de secours, climatiseurs, écrans, objets posés
+  b.model('exit_sign', 33.5, 2.5, 29.875, 180);
+  b.model('exit_sign', 30.875, 2.45, 20.5, -90);
+  b.model('exit_sign', 13, 2.6, 8.125);
+  b.model('exit_sign', 30.875, F1 + 2.45, 20.5, -90);
+  b.model('ac_indoor', 22, 2.85, 14.875, 180);
+  b.model('ac_indoor', 21, F1 + 2.52, 32.875, 180);
+  b.model('ac_indoor', 27.8, F1 + 2.52, 32.875, 180);
+  b.model('first_aid_box', 35.875, 1.45, 21.2, -90);
+  b.model('wall_tv', 40.9, 1.45, 8.125);
+  b.model('wall_tv', 25.6, F1 + 1.3, 22.125);
+  b.model('wheelchair', 34.8, 0.02, 28.4, 200);
+  b.collider(34.4, 0.02, 27.9, 35.2, 0.95, 28.9, 'metal');
+  b.model('wet_floor_sign', 33.9, 0.02, 22.6, 15);
+  b.model('floor_lamp', 28.2, F1, 18.5);
+  b.model('magazines', 28, 0.45, 25.8, 25);
+  b.model('autoclave', 5.3, 0.02, 14.27, 180);
+  b.collider(4.6, 0.02, 13.67, 6.0, 1.75, 14.87, 'metal');
+  b.model('platform_trolley', 12.6, 0.02, 9.6, 20);
+  b.collider(12.15, 0.02, 9.0, 13.05, 0.85, 10.2, 'metal');
+  b.model('hand_truck', 41.2, 0.02, 31.4, -30);
+  b.model('electrical_panel', 17.875, 1.2, 9.5, -90);
+  b.model('paper_dispenser', 3.125, 1.45, 24.3, 90);
+  b.model('paper_dispenser', 8.7, 1.45, 8.125);
+  b.model('hand_dryer', 42, 1.2, 11.3, -90);
 
   // =====================================================================================
   // Signalétique
@@ -593,9 +647,11 @@ export function build(): MapData {
   // =====================================================================================
   // Apparitions, zones et points d'intérêt
   // =====================================================================================
+  // Les Auditeurs apparaissent sur la chaussée, entre les arbres, les potelets et le mobilier du trottoir.
+  const STREET_SPAWNS = [3.2, 6.8, 11.6, 17.7, 22.2, 24.6, 33.2, 35.2, 38.6, 42];
   for (let i = 0; i < 10; i++) {
     b.spawn(0, 3 + i * 3, 0.05, 1.2, 180); // Équipe Labo : cour arrière
-    b.spawn(1, 4.5 + i * 3.6, ROAD + 0.05, i % 2 ? 36.5 : 37, 0); // Auditeurs : rue
+    b.spawn(1, STREET_SPAWNS[i]!, ROAD + 0.05, i % 2 ? 36.5 : 37, 0); // Auditeurs : rue
   }
   b.zone('site', 'A', 5, 0, 19.5, 17, 3, 32.5, 'Plateau technique');
   b.zone('site', 'B', 19, 0, 23, 30, 3, 32, 'Accueil');

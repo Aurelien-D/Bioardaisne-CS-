@@ -11,14 +11,14 @@ Aucune installation côté joueur : un navigateur récent sur PC (Chrome, Edge o
 | Élément | État |
 |---|---|
 | Déplacements « Source » (ZQSD, saut, accroupi, marche silencieuse), collisions | ✅ |
-| 8 armes (recul, dispersion, rechargement, visée à l'épaule, lunette) en vrais modèles 3D tenus à deux mains | ✅ |
+| 8 armes en vrais modèles 3D tenus à deux mains : recul, dispersion, visée à l'épaule (optique transparente à réticule lumineux, organes de visée alignés), flash de bouche, fumée, douilles éjectées, culasses et chargeurs animés au rechargement | ✅ |
 | Bots (4 niveaux de difficulté), jeu solo sans serveur | ✅ |
 | Multijoueur : salons privés (code et lien d'invitation), serveur autoritaire, chat, tableau des scores | ✅ |
 | Mode **Match à mort par équipe** en manches | ✅ |
 | Carte `de_labo_charleville` (inspirée du site du cours Briand) | ✅ |
 | Menus, options (souris, vidéo, audio, viseur, touches), HUD complet, audio procédural | ✅ |
 | Rendu réaliste : matériaux physiques photographiés, ciel HDR, soleil bas et ombres dynamiques, reflets sur les sols (linos brillants, chaussée mouillée), rayons de soleil, occlusion ambiante, bloom, tonemapping filmique | ✅ |
-| Personnages animés, mobilier, véhicules et arbres en vrais modèles 3D (sous licence libre, voir plus bas) | ✅ |
+| Personnages animés et une centaine de vrais modèles 3D pour le décor : paillasses, poste de sécurité, chariots, mobilier de bureau, climatiseurs, véhicules, vélos, arbres… (sous licence libre, voir plus bas) | ✅ |
 | Cartes `de_rethel` et `de_charleville` | ⏳ à faire |
 | Modes **Audit surprise** (désamorçage) et **Sécurisation du laboratoire** | ⏳ à faire (désactivés dans les menus ; zones et points déjà posés sur la carte) |
 
@@ -180,7 +180,8 @@ Collisions, rendu, éclairage et navigation des bots sont dérivés automatiquem
 - Éclairage précalculé : trois contrôles de qualité ne sont pas encore atteints (raccord de lumière entre deux
   dalles de sol, soleil à travers une vitre, exposition de l'arène de test). Ils sont marqués comme défauts
   connus dans `tests/lightbake.test.ts`.
-- Une partie du mobilier de laboratoire (automates, paillasses, hottes) reste modélisée par le code, faute de modèles libres convaincants.
+- Quelques équipements restent modélisés par le code, faute de modèles libres convaincants : grands automates, convoyeur,
+  centrifugeuses, fauteuil de prélèvement, banque d'accueil et petits objets de paillasse.
 - En qualité « basse », les modèles 3D d'armes et de personnages sont remplacés par leurs versions simplifiées.
 - Les reflets de sol et l'occlusion ambiante n'existent qu'en qualité « élevée » (réglage par défaut). Si la machine ne
   tient pas 34 images par seconde, le jeu retire de lui-même les reflets puis baisse la résolution ; sans accélération
@@ -202,7 +203,7 @@ Assets tiers du dossier `public/media/` :
 | Personnage animé (`media/models/soldier.json`, converti depuis `Soldier.glb`) | Exemples de [three.js](https://github.com/mrdoob/three.js), personnage « Vanguard » issu de Mixamo | Conditions d'utilisation Mixamo / Adobe (usage libre dans un projet, **pas CC0**) — à remplacer si le jeu devait être diffusé publiquement |
 
 | Armes (`media/models/weapons/`) : 7 modèles Sketchfab (via Objaverse), 1 modèle Poly Haven | Auteurs et liens dans [`public/media/credits-weapons.md`](public/media/credits-weapons.md) | CC BY 4.0 (7) et CC0 (1) |
-| Mobilier, véhicules, arbres, mobilier urbain (`media/models/props/`, 44 modèles) | Auteurs et liens dans [`public/media/credits-props.md`](public/media/credits-props.md) | CC BY 4.0 et CC0 |
+| Mobilier, équipements de laboratoire, véhicules, arbres, mobilier urbain (`media/models/props/`, 103 modèles) | Auteurs et liens dans [`public/media/credits-props.md`](public/media/credits-props.md) | CC BY 4.0 et CC0 |
 
 Les modèles sous **CC BY** imposent de citer leurs auteurs : les deux fichiers de crédits doivent accompagner toute
 diffusion du jeu. Aucun modèle « non commercial », « sans modification » ou sans licence explicite n'est utilisé.
