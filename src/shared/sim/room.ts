@@ -6,6 +6,8 @@
  */
 import { createBot, type Bot, type BotEnv, type BotGoal, type BotPlayerView } from '../bots/bot';
 import {
+  ACTION,
+  BTN,
   FALL_DAMAGE_MIN_SPEED,
   FALL_DAMAGE_PER_MS,
   HITGROUP,
@@ -20,7 +22,7 @@ import {
 } from '../constants';
 import { BOT_NAMES } from '../identity';
 import { getMap, hasMap, listMaps } from '../maps';
-import type { MapData } from '../maps/types';
+import type { MapData, ZoneDef } from '../maps/types';
 import { mulberry32, type Rng } from '../math/rng';
 import { clamp, forwardFlat, type Vec3 } from '../math/vec3';
 import { NavGrid } from '../nav/navgrid';
@@ -60,12 +62,36 @@ export interface RoomHost {
 }
 
 /** Game modes implemented by this build. */
-export const SUPPORTED_MODES: GameModeId[] = ['tdm'];
+export const SUPPORTED_MODES: GameModeId[] = ['tdm', 'defuse'];
 
 const HIST = 80; // lag-compensation samples per player (~1.2 s)
 const POST_MS = 5000;
 const OVER_MS = 10000;
 const SPAWN_PROTECT = 2;
+
+// --- "Audit surprise" (bomb defusal): the Auditeurs plant, the Labo defuses ---------------
+const ATTACKERS = 1 as const;
+const DEFENDERS = 0 as const;
+/** Seconds of holding Use to plant / to defuse, and fuse length once planted. */
+const PLANT_TIME = 3.2;
+const DEFUSE_TIME = 7;
+const BOMB_TIME = 40;
+/** Blast: lethal at the centre, fading to nothing at this radius (m). */
+const BOMB_RADIUS = 10;
+const BOMB_DAMAGE = 260;
+const PICKUP_RADIUS = 1.2;
+const DEFUSE_RADIUS = 1.7;
+/** Players joining this soon after a round went live still spawn into it. */
+const JOIN_GRACE_MS = 15000;
+
+interface BombState {
+  /** Player id carrying the bomb, -1 if none. */
+  carrier: number;
+  dropped: Vec3 | null;
+  planted: null | { site: string; pos: Vec3; explodeAt: number };
+  defused: boolean;
+  exploded: boolean;
+}
 
 interface SimPlayer {
   id: number;
@@ -91,6 +117,8 @@ interface SimPlayer {
   streakUntil: number;
   chatTimes: number[];
   view: BotPlayerView;
+  /** BTN.Use held in the last command processed (plant / defuse). */
+  useHeld: boolean;
 }
 
 const CONTROL_CHARS = new RegExp('[\\u0000-\\u001f\\u007f\\u2028\\u2029]', 'g');
@@ -153,6 +181,11 @@ export class Room {
   private matchDirty = false;
   private botEnv: BotEnv;
   private views: BotPlayerView[] = [];
+  private bomb: BombState = { carrier: -1, dropped: null, planted: null, defused: false, exploded: false };
+  /** Site the attacking bots go for this round (index into the map's sites). */
+  private targetSite = 0;
+  /** Host time at which the current round went live. */
+  private liveSince = 0;
 
   /**
    * @param code   room code shown to players
@@ -206,8 +239,14 @@ export class Room {
     score: [number, number];
     kills: [number, number];
     players: { id: number; name: string; team: TeamId; bot: boolean; kills: number; deaths: number; state: PlayerState }[];
+    bomb: BombState;
+    lastWinner: number;
+    lastReason: string;
   } {
     return {
+      bomb: this.bomb,
+      lastWinner: this.lastWinner,
+      lastReason: this.lastReason,
       tick: this.tickN,
       phase: this.phase,
       round: this.round,
@@ -237,7 +276,7 @@ export class Room {
     const p = this.createPlayer(this.uniqueName(clean(name, LIMITS.maxNameLength) || 'Joueur'), this.smallerTeam(), null);
     if (this.hostId < 0) this.hostId = p.id;
     this.syncBots();
-    if (this.phase !== 'over') this.spawn(p);
+    if (this.canSpawnNow()) this.spawn(p);
     this.host.send(p.id, {
       t: 'welcome',
       id: p.id,
@@ -257,7 +296,9 @@ export class Room {
   removeClient(id: number): void {
     const p = this.byId.get(id);
     if (!p || p.bot) return;
+    if (this.bomb.carrier === p.id) this.dropBomb(p);
     this.removePlayer(p);
+    this.checkElimination();
     if (this.hostId === id) this.hostId = this.players.find((q) => !q.bot)?.id ?? -1;
     this.chat(-1, `${p.name} a quitté la partie.`);
     this.syncBots();
@@ -332,12 +373,15 @@ export class Room {
     else if (team === 0 || team === 1) t = team;
     else t = this.smallerTeam(p);
     if (t === p.team) return;
+    if (this.bomb.carrier === p.id) this.dropBomb(p);
     if (p.state.alive) p.state.alive = false;
+    p.view.alive = false;
     p.team = t;
     p.view.team = t;
-    p.respawnAt = t === 2 ? -1 : this.tickN + TICK_RATE;
+    p.respawnAt = t === 2 || !this.canSpawnNow() ? -1 : this.tickN + TICK_RATE;
     if (t !== 2) p.loadout = { ...TEAM_DEFAULT_LOADOUT[t] };
     this.syncBots();
+    this.checkElimination();
     this.rosterDirty = true;
   }
 
@@ -409,6 +453,7 @@ export class Room {
       streakUntil: 0,
       chatTimes: [],
       view: { id, team, alive: false, state },
+      useHeld: false,
     };
     this.players.push(p);
     this.byId.set(id, p);
@@ -477,8 +522,10 @@ export class Room {
       b.team = from === 0 ? 1 : 0;
       b.view.team = b.team;
       b.name = this.botName(b.team);
+      if (this.bomb.carrier === b.id) this.dropBomb(b);
       b.state.alive = false;
-      b.respawnAt = this.tickN + TICK_RATE;
+      b.view.alive = false;
+      b.respawnAt = this.canSpawnNow() ? this.tickN + TICK_RATE : -1;
       this.rosterDirty = true;
     }
   }
@@ -497,7 +544,7 @@ export class Room {
     const primary: WeaponId =
       r < 0.5 ? TEAM_DEFAULT_LOADOUT[team].primary : r < 0.68 ? (team === 0 ? 'rifle_ak' : 'rifle_m4') : r < 0.86 ? 'smg' : r < 0.94 ? 'shotgun' : 'sniper';
     p.loadout = { primary, secondary: this.rng() < 0.75 ? 'pistol' : 'deagle' };
-    if (this.phase !== 'over') this.spawn(p);
+    if (this.canSpawnNow()) this.spawn(p);
     this.rosterDirty = true;
     return p;
   }
@@ -552,10 +599,19 @@ export class Room {
     this.timeLowDone = false;
     this.phase = this.cfg.freezeTime > 0 ? 'freeze' : 'live';
     this.phaseEnd = this.host.now() + (this.cfg.freezeTime > 0 ? this.cfg.freezeTime : this.cfg.roundTime) * 1000;
+    this.liveSince = this.host.now();
+    this.bomb = { carrier: -1, dropped: null, planted: null, defused: false, exploded: false };
     this.syncBots();
     for (const p of this.players) {
       p.streak = 0;
+      p.useHeld = false;
       this.spawn(p);
+    }
+    if (this.cfg.mode === 'defuse') {
+      // One attacker starts with the bomb; the attacking bots agree on a site for the round.
+      const carriers = this.players.filter((p) => p.team === ATTACKERS && p.state.alive);
+      this.bomb.carrier = carriers.length ? carriers[Math.floor(this.rng() * carriers.length)]!.id : -1;
+      this.targetSite = Math.floor(this.rng() * Math.max(1, this.sites().length));
     }
     const last = this.score[0] === this.cfg.roundsToWin - 1 && this.score[1] === this.cfg.roundsToWin - 1 && this.cfg.roundsToWin > 1;
     this.emitAll({ e: 'announce', key: last ? 'round_start_last' : 'round_start' });
@@ -564,6 +620,10 @@ export class Room {
 
   private endRound(winner: number, reason: string): void {
     if (this.phase !== 'live') return;
+    for (const p of this.players) {
+      p.state.action = ACTION.None;
+      p.state.actionT = 0;
+    }
     this.lastWinner = winner;
     this.lastReason = reason;
     if (winner === 0 || winner === 1) this.score[winner]++;
@@ -585,18 +645,24 @@ export class Room {
       if (now >= this.phaseEnd) {
         this.phase = 'live';
         this.phaseEnd = now + this.cfg.roundTime * 1000;
+        this.liveSince = now;
         for (const p of this.players) p.state.frozen = false;
         this.matchDirty = true;
       }
     } else if (this.phase === 'live') {
       const left = this.phaseEnd - now;
-      if (!this.timeLowDone && left <= 30000 && this.cfg.roundTime > 45) {
+      if (!this.timeLowDone && left <= 30000 && this.cfg.roundTime > 45 && !this.bomb.planted) {
         this.timeLowDone = true;
         this.emitAll({ e: 'announce', key: 'time_low' });
       }
       if (left <= 0) {
-        const [a, b] = this.kills;
-        this.endRound(a === b ? -1 : a > b ? 0 : 1, 'time');
+        if (this.cfg.mode === 'defuse') {
+          // Out of time without a plant: the defenders hold. (Once planted, the fuse decides: updateBomb.)
+          if (!this.bomb.planted) this.endRound(DEFENDERS, 'time');
+        } else {
+          const [a, b] = this.kills;
+          this.endRound(a === b ? -1 : a > b ? 0 : 1, 'time');
+        }
       }
     } else if (now >= this.phaseEnd) {
       if (this.phase === 'over') {
@@ -607,11 +673,197 @@ export class Room {
   }
 
   private objective(): ObjectiveState {
+    if (this.cfg.mode === 'defuse') {
+      const b = this.bomb;
+      return {
+        kind: 'defuse',
+        carrier: b.carrier,
+        dropped: b.dropped ? { ...b.dropped } : null,
+        planted: b.planted ? { site: b.planted.site, pos: { ...b.planted.pos }, explodeAt: b.planted.explodeAt } : null,
+        defused: b.defused,
+        exploded: b.exploded,
+      };
+    }
     return { kind: 'tdm', kills: [this.kills[0], this.kills[1]], killLimit: this.cfg.killLimit };
   }
 
-  private botGoals(_team: TeamId, _botId: number): BotGoal[] {
-    return [];
+  private botGoals(team: TeamId, botId: number): BotGoal[] {
+    if (this.cfg.mode !== 'defuse' || team === 2) return [];
+    const b = this.bomb;
+    const sites = this.sites();
+    const centre = (z: ZoneDef): Vec3 => ({ x: (z.min.x + z.max.x) / 2, y: z.min.y, z: (z.min.z + z.max.z) / 2 });
+    if (b.planted) {
+      // Attackers guard the bomb, defenders go and defuse it.
+      return team === ATTACKERS ? [{ kind: 'defend', pos: b.planted.pos, weight: 4 }] : [{ kind: 'objective', pos: b.planted.pos, weight: 10, use: true, radius: DEFUSE_RADIUS - 0.4 }];
+    }
+    if (!sites.length) return [];
+    const target = sites[this.targetSite % sites.length]!;
+    if (team === ATTACKERS) {
+      if (b.dropped) return [{ kind: 'objective', pos: b.dropped, weight: 10 }];
+      if (b.carrier === botId) return [{ kind: 'objective', pos: centre(target), weight: 10, use: true, radius: 2.4 }];
+      return sites.map((z) => ({ kind: 'attack' as const, pos: centre(z), weight: z === target ? 5 : 1 }));
+    }
+    // Defenders: half the bots hold each site.
+    const mine = sites[botId % sites.length]!;
+    return sites.map((z) => ({ kind: 'defend' as const, pos: centre(z), weight: z === mine ? 5 : 1 }));
+  }
+
+  // ------------------------------------------------------------------ bomb mode
+
+  /** No respawn during a round (elimination modes). */
+  private get noRespawn(): boolean {
+    return this.cfg.mode === 'defuse';
+  }
+
+  /** May a player who is not in the round (joined late, changed team) spawn right now? */
+  private canSpawnNow(): boolean {
+    if (this.phase === 'over') return false;
+    if (!this.noRespawn || this.phase === 'freeze') return true;
+    return this.phase === 'live' && !this.bomb.planted && this.host.now() - this.liveSince < JOIN_GRACE_MS;
+  }
+
+  private sites(): ZoneDef[] {
+    return this.map.zones.filter((z) => z.kind === 'site');
+  }
+
+  private siteAt(pos: Vec3): ZoneDef | null {
+    for (const z of this.sites()) {
+      if (pos.x >= z.min.x && pos.x <= z.max.x && pos.z >= z.min.z && pos.z <= z.max.z && pos.y >= z.min.y - 0.5 && pos.y <= z.max.y) return z;
+    }
+    return null;
+  }
+
+  /** The carrier lost the bomb (death, disconnection, team change): it lies where they stood. */
+  private dropBomb(p: SimPlayer): void {
+    const b = this.bomb;
+    if (b.carrier !== p.id || b.planted) return;
+    b.carrier = -1;
+    b.dropped = { x: p.state.pos.x, y: p.state.pos.y, z: p.state.pos.z };
+    if (b.dropped.y < this.map.killY + 1) {
+      // Lost out of the world with its carrier: it comes back where the attackers start.
+      const home = this.map.spawns.find((sp) => sp.team === ATTACKERS);
+      if (home) b.dropped = { x: home.pos.x, y: home.pos.y, z: home.pos.z };
+    }
+    this.emitAll({ e: 'obj', kind: 'bomb_dropped', id: p.id, pos: [r3(b.dropped.x), r3(b.dropped.y), r3(b.dropped.z)] });
+    this.emitAll({ e: 'announce', key: 'bomb_dropped' });
+    this.matchDirty = true;
+  }
+
+  /** A team with nobody left alive loses the round (attackers only before the plant). */
+  private checkElimination(): void {
+    if (!this.noRespawn || this.phase !== 'live') return;
+    let att = 0;
+    let def = 0;
+    for (const p of this.players) {
+      if (!p.state.alive) continue;
+      if (p.team === ATTACKERS) att++;
+      else if (p.team === DEFENDERS) def++;
+    }
+    if (def === 0 && this.teamSize(DEFENDERS) > 0) this.endRound(ATTACKERS, 'elimination');
+    else if (att === 0 && this.teamSize(ATTACKERS) > 0 && !this.bomb.planted) this.endRound(DEFENDERS, 'elimination');
+  }
+
+  /** Bomb logic of a live round: pick-up, plant, defuse, explosion. */
+  private updateBomb(now: number): void {
+    const b = this.bomb;
+    if (b.planted) {
+      if (now >= b.planted.explodeAt) {
+        this.explodeBomb();
+        return;
+      }
+      const at = b.planted.pos;
+      for (const p of this.players) {
+        const s = p.state;
+        if (p.team !== DEFENDERS || !s.alive) continue;
+        const near = Math.hypot(s.pos.x - at.x, s.pos.z - at.z) < DEFUSE_RADIUS && Math.abs(s.pos.y - at.y) < 1.5;
+        if (p.useHeld && near && (s.onGround || s.action === ACTION.Defuse)) {
+          if (s.action !== ACTION.Defuse) {
+            s.action = ACTION.Defuse;
+            s.actionT = 0;
+          }
+          s.actionT += TICK_DT / DEFUSE_TIME;
+          if (s.actionT >= 1) {
+            b.defused = true;
+            p.score += 3;
+            this.emitAll({ e: 'obj', kind: 'bomb_defused', id: p.id, pos: [r3(at.x), r3(at.y), r3(at.z)] });
+            this.emitAll({ e: 'announce', key: 'bomb_defused', id: p.id });
+            this.rosterDirty = true;
+            this.endRound(DEFENDERS, 'defused');
+            return;
+          }
+        } else if (s.action === ACTION.Defuse) {
+          s.action = ACTION.None;
+          s.actionT = 0;
+        }
+      }
+      return;
+    }
+    if (b.carrier < 0 && !b.dropped) {
+      // Nobody could take the bomb when the round started (attackers joined afterwards): hand it out now.
+      const late = this.players.filter((p) => p.team === ATTACKERS && p.state.alive);
+      if (!late.length) return;
+      b.carrier = late[Math.floor(this.rng() * late.length)]!.id;
+      this.matchDirty = true;
+    }
+    if (b.dropped) {
+      // Any attacker walking over the dropped bomb takes it.
+      for (const p of this.players) {
+        const s = p.state;
+        if (p.team !== ATTACKERS || !s.alive) continue;
+        if (Math.hypot(s.pos.x - b.dropped.x, s.pos.z - b.dropped.z) < PICKUP_RADIUS && Math.abs(s.pos.y - b.dropped.y) < 1.5) {
+          b.carrier = p.id;
+          b.dropped = null;
+          this.emitAll({ e: 'obj', kind: 'bomb_picked', id: p.id });
+          this.emitAll({ e: 'announce', key: 'bomb_picked', id: p.id });
+          this.matchDirty = true;
+          break;
+        }
+      }
+      return;
+    }
+    const c = b.carrier >= 0 ? this.byId.get(b.carrier) : undefined;
+    if (!c || !c.state.alive) return;
+    const s = c.state;
+    const site = this.siteAt(s.pos);
+    if (c.useHeld && site && (s.onGround || s.action === ACTION.Plant)) {
+      if (s.action !== ACTION.Plant) {
+        s.action = ACTION.Plant;
+        s.actionT = 0;
+      }
+      s.actionT += TICK_DT / PLANT_TIME;
+      if (s.actionT >= 1) {
+        s.action = ACTION.None;
+        s.actionT = 0;
+        b.planted = { site: site.id, pos: { x: s.pos.x, y: s.pos.y, z: s.pos.z }, explodeAt: now + BOMB_TIME * 1000 };
+        b.carrier = -1;
+        this.phaseEnd = b.planted.explodeAt; // the fuse replaces the round clock
+        c.score += 2;
+        this.emitAll({ e: 'obj', kind: 'bomb_planted', id: c.id, pos: [r3(s.pos.x), r3(s.pos.y), r3(s.pos.z)] });
+        this.emitAll({ e: 'announce', key: 'bomb_planted', id: c.id });
+        this.matchDirty = true;
+        this.rosterDirty = true;
+      }
+    } else if (s.action === ACTION.Plant) {
+      s.action = ACTION.None;
+      s.actionT = 0;
+    }
+  }
+
+  private explodeBomb(): void {
+    const b = this.bomb;
+    if (!b.planted || b.exploded) return;
+    const at = b.planted.pos;
+    b.exploded = true;
+    this.emitAll({ e: 'obj', kind: 'bomb_exploded', pos: [r3(at.x), r3(at.y), r3(at.z)] });
+    this.emitAll({ e: 'announce', key: 'bomb_exploded' });
+    this.endRound(ATTACKERS, 'exploded');
+    // The blast, after the round is decided (so the deaths cannot change its outcome).
+    for (const p of this.players.slice()) {
+      const s = p.state;
+      if (!s.alive) continue;
+      const d = Math.hypot(s.pos.x - at.x, s.pos.y - at.y, s.pos.z - at.z);
+      if (d < BOMB_RADIUS) this.damage(p, null, BOMB_DAMAGE * (1 - d / BOMB_RADIUS), HITGROUP.Chest, null);
+    }
   }
 
   private matchState(): MatchState {
@@ -778,7 +1030,9 @@ export class Room {
     victim.view.alive = false;
     victim.deaths++;
     victim.streak = 0;
-    victim.respawnAt = this.tickN + Math.round(this.cfg.respawnDelay * TICK_RATE);
+    victim.respawnAt = this.noRespawn ? -1 : this.tickN + Math.round(this.cfg.respawnDelay * TICK_RATE);
+    s.action = ACTION.None;
+    s.actionT = 0;
     const real = killer && killer !== victim && killer.team !== victim.team;
     if (killer && real) {
       killer.kills++;
@@ -804,6 +1058,10 @@ export class Room {
       if (this.kills[0] >= this.cfg.killLimit) this.endRound(0, 'kills');
       else if (this.kills[1] >= this.cfg.killLimit) this.endRound(1, 'kills');
     }
+    if (this.noRespawn) {
+      if (this.bomb.carrier === victim.id) this.dropBomb(victim);
+      this.checkElimination();
+    }
   }
 
   // ------------------------------------------------------------------ tick
@@ -813,6 +1071,7 @@ export class Room {
     const ev = this.ev;
     if (s.protect > 0) s.protect = Math.max(0, s.protect - TICK_DT);
     stepPlayer(s, cmd, this.world, ev);
+    p.useHeld = (cmd.buttons & BTN.Use) !== 0;
     if (ev.fired) this.resolveShot(p, ev.fired.weapon, ev.fired.origin, ev.fired.dirs, cmd.st);
     if (ev.landedSpeed > FALL_DAMAGE_MIN_SPEED) this.damage(p, null, (ev.landedSpeed - FALL_DAMAGE_MIN_SPEED) * FALL_DAMAGE_PER_MS, HITGROUP.Legs, null);
     if (s.alive && s.pos.y < this.map.killY) this.kill(p, null, null, false);
@@ -859,6 +1118,8 @@ export class Room {
       }
     }
 
+    if (this.cfg.mode === 'defuse' && this.phase === 'live') this.updateBomb(now);
+
     if (this.matchDirty) {
       this.matchDirty = false;
       const out: ServerMsg = { t: 'match', match: this.matchState() };
@@ -883,6 +1144,7 @@ export class Room {
       if (s.zoom > 0) flags |= PFLAG.Zoomed;
       if (s.action !== 0) flags |= PFLAG.Acting;
       if (s.protect > 0) flags |= PFLAG.Protected;
+      if (p.id === this.bomb.carrier) flags |= PFLAG.Carrying;
       const w = s.slots[s.active];
       tuples.push([p.id, r3(s.pos.x), r3(s.pos.y), r3(s.pos.z), r4(s.yaw), r4(s.pitch), r3(s.crouch), flags, w ? WEAPON_INDEX[w.id] : 0, s.health]);
     }
