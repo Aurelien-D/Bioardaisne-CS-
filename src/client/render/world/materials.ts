@@ -26,16 +26,22 @@ const DEFAULT_OPACITY = 0.5;
 const WATER_MAP_FRAGMENT = /* glsl */ `
 #ifdef USE_MAP
 	float basT = basTime;
+	// Two layers of the texture drifting in different directions, gently wobbling.
 	vec2 basWobble = vec2( sin( vMapUv.y * 6.2832 + basT * 0.7 ), cos( vMapUv.x * 6.2832 + basT * 0.6 ) ) * 0.02;
 	vec4 basA = texture2D( map, vMapUv + basWobble + vec2( basT * 0.012, basT * 0.007 ) );
 	vec4 basB = texture2D( map, vMapUv * 1.37 - basWobble + vec2( - basT * 0.009, basT * 0.011 ) );
 	vec4 sampledDiffuseColor = mix( basA, basB, 0.5 );
-	float basRipple = sin( vMapUv.x * 25.0 + basT * 1.3 ) * sin( vMapUv.y * 19.0 - basT * 1.1 )
-		+ 0.5 * sin( ( vMapUv.x + vMapUv.y ) * 41.0 + basT * 2.1 );
-	sampledDiffuseColor.rgb *= 1.0 + 0.09 * basRipple;
-	sampledDiffuseColor.rgb += vec3( 0.55, 0.75, 0.8 ) * 0.07 * smoothstep( 0.9, 1.4, basRipple );
+	// Ripples: a slow swell plus a net of thin bright crests where wave trains cross.
+	vec2 basP = vMapUv * 12.5664;
+	float basSwell = sin( basP.x * 0.9 + basP.y * 0.5 + basT * 0.8 ) + sin( basP.y * 1.1 - basP.x * 0.4 - basT * 0.65 );
+	float basC1 = 1.0 - abs( sin( basP.x * 1.15 + basP.y * 0.55 + basT * 0.45 ) );
+	float basC2 = 1.0 - abs( sin( basP.y * 1.45 - basP.x * 0.35 - basT * 0.38 ) );
+	float basC3 = 1.0 - abs( sin( ( basP.x - basP.y ) * 0.85 + basT * 0.3 ) );
+	float basCrest = pow( basC1 * basC2 + 0.6 * basC2 * basC3, 3.0 );
+	sampledDiffuseColor.rgb *= 1.0 + 0.045 * basSwell;
+	sampledDiffuseColor.rgb += vec3( 0.45, 0.68, 0.74 ) * 0.11 * basCrest;
 	diffuseColor *= sampledDiffuseColor;
-	diffuseColor.a = clamp( diffuseColor.a + 0.05 * basRipple, 0.0, 1.0 );
+	diffuseColor.a = clamp( diffuseColor.a + 0.03 * basSwell + 0.05 * basCrest, 0.0, 1.0 );
 #endif
 `;
 
@@ -87,10 +93,12 @@ export class WorldMaterials {
 
   /**
    * Attach a lightmap to every world material (existing and future). The geometry must
-   * carry a `uv1` attribute. MeshBasicMaterial computes texture × vertexColour ×
-   * lightMapTexel × lightMapIntensity / PI.
+   * carry a `uv1` attribute (the texture is switched to UV channel 1 here).
+   * MeshBasicMaterial computes texture × vertexColour × lightMapTexel × lightMapIntensity / PI,
+   * so with the default intensity (PI) a texel of 1.0 leaves the colour unchanged.
    */
   setLightMap(texture: THREE.Texture | null, intensity = Math.PI): void {
+    if (texture) texture.channel = 1; // sample with the uv1 attribute
     this.lightMap = texture;
     this.lightMapIntensity = intensity;
     for (const m of this.materials.values()) {

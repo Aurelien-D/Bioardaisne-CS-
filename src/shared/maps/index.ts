@@ -3,6 +3,7 @@
  * then add it to MAP_MODULES below.
  */
 import type { MapData, MapMeta } from './types';
+import * as devKit from './dev_kit';
 import * as devTest from './dev_test';
 
 export interface MapModule {
@@ -11,7 +12,7 @@ export interface MapModule {
 }
 
 /** Order = order in the map picker. Maps whose id starts with "dev_" are hidden from the menu. */
-export const MAP_MODULES: MapModule[] = [devTest];
+export const MAP_MODULES: MapModule[] = [devTest, devKit];
 
 const cache = new Map<string, MapData>();
 

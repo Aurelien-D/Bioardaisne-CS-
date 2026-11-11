@@ -19,10 +19,12 @@
  *                  landing modifiers
  *   3. ground      3 cm downward probe, only while not moving up
  *   4. jump        rising edge of BTN.Jump on the ground
- *   5. velocity    ground: friction then acceleration; air: gravity (half before the move,
- *                  half after, which integrates the parabola exactly) and air acceleration
+ *   5. velocity    ground: friction then acceleration (never slower to respond than at run
+ *                  speed, so that slow stances can overcome friction); air: gravity (half
+ *                  before the move, half after: exact parabola) and limited air acceleration
  *   6. move        ground: slide, or "step up / slide / step down" when that goes farther,
- *                  then stick to the ground when walking down stairs; air: slide
+ *                  then stick to the ground when walking down stairs; air: slide (obstacles
+ *                  low enough to be stepped onto do not kill the speed)
  *   7. landing     ev.landedSpeed + landing slow-down
  */
 import {
@@ -41,6 +43,25 @@ import type { PlayerState, StepEvents, UserCmd } from '../types';
 
 /** The player is on the ground when a surface lies within this distance below the feet (m). */
 const GROUND_PROBE = 0.03;
+/**
+ * Gap (m) between the feet and the ground they rest on: the back-off distance of world sweeps.
+ * A player placed closer than this (spawn points sit exactly on the floor) is raised to it, so
+ * that a standing player is always in the same, well-defined position relative to the floor.
+ */
+const REST_GAP = 1e-3;
+/** Height differences below this (m) are float noise, not movement. */
+const REST_GAP_SLACK = 1e-6;
+/**
+ * After a ground move the player is pulled down onto any surface within this distance (walking
+ * down stairs and kerbs without leaving the ground). Measured from the feet, which rest
+ * REST_GAP above the ground, so that a drop of exactly STEP_HEIGHT still counts.
+ */
+const STEP_DOWN = STEP_HEIGHT + 2 * REST_GAP;
+/**
+ * Horizontal distance (m) probed above a low obstacle hit in the air, to tell a step from a
+ * wall with a plinth at its foot.
+ */
+const STEP_PROBE = 0.03;
 /** A surface is walkable when its normal points up at least this much. */
 const WALKABLE_NORMAL_Y = 0.7;
 /** Collisions resolved per move: with axis-aligned surfaces three are enough to stop dead. */
@@ -141,12 +162,24 @@ function unstuck(world: CollisionWorld): boolean {
 
 /**
  * Downward probe: true if a walkable surface lies within `dist` below the hull, in which case
- * the hull is moved down onto it.
+ * the hull is brought to rest on it (REST_GAP above the surface).
  */
 function settleOnGround(world: CollisionWorld, dist: number): boolean {
   const tr = sweepHull(world, 0, -dist, 0);
   if (!tr.hit || tr.startSolid || tr.normal.y <= WALKABLE_NORMAL_Y) return false;
-  py -= dist * tr.fraction;
+  const drop = dist * tr.fraction;
+  if (drop > REST_GAP_SLACK) {
+    py -= drop;
+  } else {
+    // Already resting (the height is left untouched: no float jitter while standing or
+    // walking), or closer to the surface than the usual gap: restore it if there is headroom.
+    const rest = world.solids[tr.solid]!.max.y + REST_GAP;
+    if (py < rest - REST_GAP_SLACK) {
+      const y = py;
+      py = rest;
+      if (hullBlocked(world, hh)) py = y;
+    }
+  }
   return true;
 }
 
@@ -242,6 +275,38 @@ function stepSlideMove(world: CollisionWorld, dt: number): void {
   vx = avx;
   vy = 0;
   vz = avz;
+}
+
+/**
+ * Air move. Slide; then, if a wall stopped the player close to the ground, check whether that
+ * "wall" is something a player standing there would simply step onto (a stair, a kerb). If it
+ * is, the speed toward it is kept: the position is still blocked for now, but the player
+ * carries on as soon as the feet clear the obstacle or touch the ground (where stepSlideMove
+ * climbs it). Without this, jumping on a staircase would kill all momentum at every riser.
+ * Only the velocity differs from a plain slide: where the player can go is unchanged.
+ */
+function airSlideMove(world: CollisionWorld, dt: number): void {
+  const svx = vx;
+  const svz = vz;
+  const flags = slideMove(world, dt);
+  if ((flags & HIT_WALL) === 0 || (flags & HIT_STUCK) !== 0) return;
+
+  // Is there ground within stepping distance below the blocked position?
+  const below = sweepHull(world, 0, -STEP_DOWN, 0);
+  if (!below.hit || below.startSolid || below.normal.y <= WALKABLE_NORMAL_Y) return;
+  // Raise the hull as high as a step taken from that ground would (no higher than a ceiling allows)...
+  const raise = STEP_HEIGHT - STEP_DOWN * below.fraction;
+  if (raise <= 0) return;
+  const up = sweepHull(world, 0, raise, 0);
+  if (up.startSolid) return;
+  const lift = raise * up.fraction;
+  if (lift <= 0) return;
+  const y = py;
+  py += lift;
+  // ...and see whether the way is clear from up there on each axis that was blocked.
+  if (vx === 0 && svx !== 0 && !sweepHull(world, svx > 0 ? STEP_PROBE : -STEP_PROBE, 0, 0).hit) vx = svx;
+  if (vz === 0 && svz !== 0 && !sweepHull(world, 0, 0, svz > 0 ? STEP_PROBE : -STEP_PROBE).hit) vz = svz;
+  py = y;
 }
 
 /**
@@ -378,7 +443,11 @@ export function stepMovement(
     if (hasWish) {
       const addSpeed = wishSpeed - (vx * wishX + vz * wishZ);
       if (addSpeed > 0) {
-        let accelSpeed = MOVE.accel * dt * wishSpeed;
+        // Quake / Source formula, except that the acceleration is scaled by at least the run
+        // speed (as later Counter-Strike versions do). With the plain `accel * dt * wishSpeed`,
+        // slow targets (crouching with a heavy weapon, scoped, crouch + walk) gain less speed
+        // per tick than the stopSpeed friction removes and the player could not move at all.
+        let accelSpeed = MOVE.accel * dt * (wishSpeed > MOVE.runSpeed ? wishSpeed : MOVE.runSpeed);
         if (accelSpeed > addSpeed) accelSpeed = addSpeed;
         vx += accelSpeed * wishX;
         vz += accelSpeed * wishZ;
@@ -388,7 +457,7 @@ export function stepMovement(
     // --- 6a. Move, climbing steps, then stay glued to the ground going down stairs ------------
     if (vx !== 0 || vz !== 0) {
       stepSlideMove(world, dt);
-      grounded = settleOnGround(world, STEP_HEIGHT);
+      grounded = settleOnGround(world, STEP_DOWN);
     }
   } else {
     // --- 5b. Air: gravity and limited air control ---------------------------------------------
@@ -408,7 +477,7 @@ export function stepMovement(
 
     // --- 6b. Move -----------------------------------------------------------------------------
     const fallSpeed = vy < 0 ? -vy : 0;
-    slideMove(world, dt);
+    airSlideMove(world, dt);
     vy -= halfGravity;
     if (vy < -MOVE.maxFallSpeed) vy = -MOVE.maxFallSpeed;
 

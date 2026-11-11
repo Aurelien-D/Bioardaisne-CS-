@@ -12,9 +12,9 @@
  */
 
 /** Non-breaking space (before ":" and inside « »). */
-export const NBSP = ' ';
+export const NBSP = '\u00a0';
 /** Narrow non-breaking space (before ";", "!" and "?"). */
-export const NNBSP = ' ';
+export const NNBSP = '\u202f';
 
 /** Apply French typographic spacing rules to a UI string. Idempotent. */
 export function frTypo(text: string): string {
@@ -229,7 +229,7 @@ export function formatDuration(seconds: number): string {
   return r === 0 ? `${m} min` : `${m} min ${String(r).padStart(2, '0')} s`;
 }
 
-/** French plural helper: plural(3, 'joueur') → "3 joueurs". */
+/** French plural helper: plural(3, 'joueur') → "3 joueurs" (number and noun joined by a non-breaking space). */
 export function plural(n: number, singular: string, pluralForm?: string): string {
-  return `${n} ${n > 1 ? (pluralForm ?? `${singular}s`) : singular}`;
+  return `${n}${NBSP}${n > 1 ? (pluralForm ?? `${singular}s`) : singular}`;
 }

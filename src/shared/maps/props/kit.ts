@@ -189,7 +189,7 @@ export function screen(b: MapBuilder, cx: number, y0: number, z: number, w: numb
 
 /** One blood-collection tube standing at (cx, y0, cz): glass body + coloured cap. */
 export function tube(b: MapBuilder, cx: number, y0: number, cz: number, cap: MaterialId, h = 0.1): void {
-  cyl(b, cx, y0, cz, 0.016, h - 0.02, 'paper_white', 0xd9c9c4, 6);
+  cyl(b, cx, y0, cz, 0.016, h - 0.02, 'plastic_red', 0x9c5a5e, 6);
   cyl(b, cx, y0 + h - 0.022, cz, 0.02, 0.022, cap, undefined, 6);
 }
 
@@ -197,4 +197,35 @@ export function tube(b: MapBuilder, cx: number, y0: number, cz: number, cap: Mat
 export function carton(b: MapBuilder, cx: number, y0: number, cz: number, w: number, h: number, d: number, tint?: number): void {
   bx(b, cx, y0, cz, w, h, d, 'cardboard', tint);
   bx(b, cx, y0 + h - 0.002, cz, Math.min(0.06, w / 4), 0.004, d + 0.004, 'paper_white', 0xe8dcc0);
+}
+
+/**
+ * Desktop monitor on its stand, screen facing +Z. (cx, cz) = centre of the stand, y0 = desk surface.
+ * `w` × `h` = size of the panel.
+ */
+export function monitor(b: MapBuilder, cx: number, y0: number, cz: number, w = 0.54, h = 0.33, mat: MaterialId = 'screen_on'): void {
+  bx(b, cx, y0, cz, 0.2, 0.012, 0.16, 'plastic_black');
+  bx(b, cx, y0 + 0.012, cz - 0.03, 0.04, 0.13, 0.03, 'plastic_black');
+  screen(b, cx, y0 + 0.1, cz - 0.03, w, h, mat);
+}
+
+/** Keyboard + mouse in front of a monitor (y0 = desk surface, cz = centre of the keyboard). */
+export function keyboard(b: MapBuilder, cx: number, y0: number, cz: number): void {
+  bx(b, cx, y0, cz, 0.42, 0.016, 0.14, 'plastic_black');
+  bx(b, cx, y0 + 0.016, cz - 0.005, 0.39, 0.004, 0.105, 'plastic_grey', 0x70757b);
+  bx(b, cx + 0.32, y0, cz, 0.2, 0.004, 0.22, 'plastic_white', C.navy);
+  bx(b, cx + 0.32, y0 + 0.004, cz, 0.06, 0.028, 0.1, 'plastic_black');
+}
+
+/** Five-spoke star base with casters (office chairs, stools). Returns the height of the hub top. */
+export function starBase(b: MapBuilder, radius = 0.28): number {
+  for (let i = 0; i < 5; i++) {
+    const a = (i * 2 * Math.PI) / 5 + 0.3;
+    const cx = Math.cos(a) * radius * 0.5;
+    const cz = -Math.sin(a) * radius * 0.5;
+    b.prim('box', cx, 0.085, cz, radius, 0.03, 0.045, 'metal_brushed', { rot: { x: 0, y: a, z: 0 } });
+    ball(b, Math.cos(a) * radius, 0.035, -Math.sin(a) * radius, 0.07, 0.07, 0.07, 'rubber_black', undefined, 6);
+  }
+  cyl(b, 0, 0.06, 0, 0.09, 0.06, 'metal_brushed', undefined, 8);
+  return 0.12;
 }

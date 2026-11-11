@@ -4,7 +4,7 @@
  * fine here — `h()` / `frTypo()` insert the non-breaking spaces at render time.
  */
 import type { KeyAction } from '../../core/settings';
-import type { GameModeId, TeamId } from '../../../shared/types';
+import type { GameModeId } from '../../../shared/types';
 
 export const VERSION_LABEL = 'v0.1 — non accrédité';
 
@@ -37,7 +37,7 @@ export const LAB_TIPS: string[] = [
   'On ne court pas avec un bistouri. Sauf ici.',
   'Le contrôle qualité passe toujours… à la troisième tentative.',
   'Pensez à vous hydrater. Le café ne compte pas. Enfin si, un peu.',
-  'Changez d’arme avec {loadout} en début de manche : le bon outil pour la bonne paillasse.',
+  'Changez d’équipement avec {loadout} en début de manche : à chaque paillasse son outil.',
 ];
 
 /** Funny lab nicknames proposed by the dice button (all ≤ LIMITS.maxNameLength). */
@@ -105,12 +105,6 @@ export const TEAM_ROLES: Record<GameModeId, Record<0 | 1, { tag: string; goal: s
     0: { tag: 'Défense', goal: 'Gardez les glacières d’échantillons au frais jusqu’à la fin du temps.' },
     1: { tag: 'Attaque', goal: 'Saisissez les glacières et rapportez-les à la zone d’extraction.' },
   },
-};
-
-export const TEAM_ARTICLE: Record<TeamId, string> = {
-  0: 'l’Équipe Labo',
-  1: 'Les Auditeurs',
-  2: 'les spectateurs',
 };
 
 /** Groups of the key binding list (options and cheat-sheet). */

@@ -1191,7 +1191,7 @@ export interface CeilingLightOpts {
   panel?: [number, number];
   /** Light colour (default neutral white 0xfff8ee). */
   color?: number;
-  /** LightDef intensity (default: derived from the spacing for an evenly lit office, ≈ 1). */
+  /** LightDef intensity (default: derived from the spacing for an evenly lit office: 0.8 at 2.5 m, 0.96 at 4 m). */
   intensity?: number;
   /** LightDef range (default: derived from the spacing, 7–14 m). */
   range?: number;
@@ -1229,7 +1229,7 @@ export function ceilingLights(b: MapBuilder, area: Rect, spacing: number, y: num
   pd = Math.min(pd, (d / nz) * 0.8);
   const color = opts.color ?? 0xfff8ee;
   const every = Math.max(1, Math.floor(opts.lightEvery ?? 1));
-  const intensity = opts.intensity ?? Math.min(1.6, Math.max(0.8, 0.7 + 0.1 * pitch)) * (every > 1 ? 1 + 0.35 * (every - 1) : 1);
+  const intensity = opts.intensity ?? Math.min(1.4, Math.max(0.7, 0.6 + 0.09 * pitch)) * (every > 1 ? 1 + 0.35 * (every - 1) : 1);
   const range = opts.range ?? Math.min(14, Math.max(7, pitch * 2.4)) * (every > 1 ? 1.3 : 1);
   const mat = opts.mat ?? 'light_panel';
   const out: { x: number; z: number }[] = [];

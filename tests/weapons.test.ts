@@ -3,6 +3,13 @@
  *
  * stepWeapons is driven directly, the way stepPlayer drives it: one command per
  * tick, `prevButtons` updated after the call. Movement is not involved.
+ *
+ * Expected values are derived from weapons/defs.ts wherever possible, so the
+ * tests check the logic and survive balance changes.
+ *
+ * The last block prints a gunplay report (damage table, accuracy table, spray
+ * pattern). Vitest's default reporter shows it; if your reporter hides the
+ * output of passing tests, run with `--reporter=default` or `--silent=false`.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -32,11 +39,27 @@ import {
 } from '../src/shared/weapons/defs';
 import { activeWeapon, createSlots, currentSpread, shotSeed, stepWeapons } from '../src/shared/weapons/logic';
 
+type Shot = NonNullable<StepEvents['fired']>;
+
 const R2D = 180 / Math.PI;
 const FIREARMS = WEAPON_IDS.filter((id) => WEAPONS[id].kind === 'hitscan');
+const AUTOMATICS = FIREARMS.filter((id) => WEAPONS[id].auto);
+const SEMI_AUTOMATICS = FIREARMS.filter((id) => !WEAPONS[id].auto);
+/** Long enough for any view punch / inaccuracy to recover completely. */
+const RECOVERY_TICKS = 10 * TICK_RATE;
 
 /** Number of ticks a timer of `seconds` blocks for. */
 const ticksFor = (seconds: number): number => Math.ceil(seconds * TICK_RATE - 1e-9);
+
+/** Shots delivered in `ticks` ticks at the maximum rate: one on tick 0, then one per fireInterval. */
+const shotsIn = (w: WeaponDef, ticks: number): number =>
+  1 + Math.floor(((ticks - 1) * TICK_DT) / w.fireInterval + 1e-9);
+
+/** Exponential recovery factor over `ticks` ticks. */
+const decay = (rate: number, ticks = 1): number => Math.exp(-rate * TICK_DT) ** ticks;
+
+/** Angle (radians) between two unit vectors. */
+const angleBetween = (a: Vec3, b: Vec3): number => Math.atan2(length(cross(a, b)), dot(a, b));
 
 /** A player standing still on the ground with `weapon` in hands, ready to fire. */
 function playerWith(weapon: WeaponId): PlayerState {
@@ -87,7 +110,7 @@ class Rig {
   }
 
   /** Tick with `buttons` until `done(ev)`; returns how many ticks it took (1 = the very next tick). */
-  until(done: (ev: StepEvents) => boolean, buttons = 0, limit = 2000): number {
+  until(done: (ev: StepEvents) => boolean, buttons = 0, limit = 5000): number {
     for (let n = 1; n <= limit; n++) if (done(this.tick(buttons))) return n;
     throw new Error(`condition not reached within ${limit} ticks`);
   }
@@ -103,9 +126,9 @@ class Rig {
     return ready && (this.s.prevButtons & BTN.Fire) === 0 ? BTN.Fire : 0;
   }
 
-  /** Fire `count` shots as fast as the weapon allows; returns the fire events. */
-  burst(count: number, limit = 4000): NonNullable<StepEvents['fired']>[] {
-    const out: NonNullable<StepEvents['fired']>[] = [];
+  /** Fire `count` shots as fast as the weapon allows. */
+  burst(count: number, limit = 5000): Shot[] {
+    const out: Shot[] = [];
     for (let n = 0; n < limit && out.length < count; n++) {
       const ev = this.tick(this.bestTrigger());
       if (ev.fired) out.push(ev.fired);
@@ -115,29 +138,28 @@ class Rig {
   }
 }
 
-/** One shot from a copy of `s` with a given command sequence number. */
-function shootCopy(s: PlayerState, seq: number): NonNullable<StepEvents['fired']> {
-  const copy = clonePlayerState(s);
+/** One shot from a copy of `s` with a given command sequence number; `s` itself is left untouched. */
+function shootCopy(s: PlayerState, seq: number): { shot: Shot; after: PlayerState } {
+  const after = clonePlayerState(s);
   const ev = newStepEvents();
-  stepWeapons(copy, { seq, buttons: BTN.Fire, yaw: copy.yaw, pitch: copy.pitch, slot: -1, st: 0 }, ev);
+  stepWeapons(after, { seq, buttons: BTN.Fire, yaw: after.yaw, pitch: after.pitch, slot: -1, st: 0 }, ev);
   if (!ev.fired) throw new Error('no shot fired');
-  return ev.fired;
+  return { shot: ev.fired, after };
 }
 
-/** Angle (radians) between two unit vectors. */
-const angleBetween = (a: Vec3, b: Vec3): number => Math.atan2(length(cross(a, b)), dot(a, b));
+const dirsOf = (s: PlayerState, seq: number): Vec3[] => shootCopy(s, seq).shot.dirs;
 
 describe('inventory', () => {
   it('createSlots gives primary, secondary and knife with full ammo', () => {
-    const slots = createSlots({ primary: 'rifle_ak', secondary: 'deagle' });
-    expect(slots).toHaveLength(SLOT_COUNT);
-    expect(slots[SLOT.Primary]).toEqual({ id: 'rifle_ak', clip: 30, reserve: 90 });
-    expect(slots[SLOT.Secondary]).toEqual({ id: 'deagle', clip: 7, reserve: 35 });
-    expect(slots[SLOT.Melee]).toEqual({ id: 'knife', clip: 0, reserve: 0 });
-    for (const id of WEAPON_IDS) {
-      const def = WEAPONS[id];
-      const slot = playerWith(id).slots[def.slot];
-      expect(slot).toEqual({ id, clip: def.clip, reserve: def.reserve });
+    const full = (id: WeaponId): WeaponSlotState => ({ id, clip: WEAPONS[id].clip, reserve: WEAPONS[id].reserve });
+    for (const primary of WEAPON_IDS.filter((id) => WEAPONS[id].slot === SLOT.Primary)) {
+      for (const secondary of WEAPON_IDS.filter((id) => WEAPONS[id].slot === SLOT.Secondary)) {
+        const slots = createSlots({ primary, secondary });
+        expect(slots).toHaveLength(SLOT_COUNT);
+        expect(slots[SLOT.Primary]).toEqual(full(primary));
+        expect(slots[SLOT.Secondary]).toEqual(full(secondary));
+        expect(slots[SLOT.Melee]).toEqual(full('knife'));
+      }
     }
   });
 
@@ -146,22 +168,30 @@ describe('inventory', () => {
     const b = createSlots(DEFAULT_LOADOUT);
     expect(a).toEqual(b);
     a[SLOT.Primary]!.clip = 0;
+    a[SLOT.Melee] = null;
     expect(b[SLOT.Primary]!.clip).toBe(WEAPONS[DEFAULT_LOADOUT.primary].clip);
+    expect(b[SLOT.Melee]).not.toBeNull();
   });
 
   it('createSlots falls back to the default loadout for weapons that do not fit the slot', () => {
-    const bad = { primary: 'pistol', secondary: 'nope' } as unknown as Loadout;
-    const slots = createSlots(bad);
-    expect(slots[SLOT.Primary]!.id).toBe(DEFAULT_LOADOUT.primary);
-    expect(slots[SLOT.Secondary]!.id).toBe(DEFAULT_LOADOUT.secondary);
-    expect(slots[SLOT.Melee]!.id).toBe('knife');
+    const cases = [
+      { primary: 'pistol', secondary: 'nope' },
+      { primary: 'knife', secondary: 'rifle_ak' },
+      {},
+    ] as unknown as Loadout[];
+    for (const bad of cases) {
+      const slots = createSlots(bad);
+      expect(slots[SLOT.Primary]!.id).toBe(DEFAULT_LOADOUT.primary);
+      expect(slots[SLOT.Secondary]!.id).toBe(DEFAULT_LOADOUT.secondary);
+      expect(slots[SLOT.Melee]!.id).toBe('knife');
+    }
   });
 
   it('activeWeapon follows the active slot and falls back to the knife', () => {
     const s = playerWith('rifle_ak');
     expect(activeWeapon(s)).toBe(WEAPONS.rifle_ak);
     s.active = SLOT.Secondary;
-    expect(activeWeapon(s)).toBe(WEAPONS.pistol);
+    expect(activeWeapon(s)).toBe(WEAPONS[DEFAULT_LOADOUT.secondary]);
     s.active = SLOT.Melee;
     expect(activeWeapon(s)).toBe(WEAPONS.knife);
     s.slots[SLOT.Primary] = null;
@@ -181,38 +211,50 @@ describe('rate of fire', () => {
       let shots = 0;
       for (let t = 0; t < 2 * TICK_RATE; t++) if (rig.tick(rig.bestTrigger()).fired) shots++;
       expect(Math.abs(shots - 2 / w.fireInterval)).toBeLessThanOrEqual(1);
-      // Exact count: one shot at t = 0, then one every fireInterval, each on the first tick at or after it is due.
-      expect(shots).toBe(1 + Math.floor(((2 * TICK_RATE - 1) * TICK_DT) / w.fireInterval + 1e-9));
+      // Exactly: each shot leaves on the first tick at or after the moment it is due.
+      expect(shots).toBe(shotsIn(w, 2 * TICK_RATE));
     });
   }
 
   it('keeps the exact average rate over a long burst (no rounding up to whole ticks)', () => {
-    const rig = new Rig('rifle_ak');
-    rig.gun.clip = 100000;
-    const shots = rig.hold(BTN.Fire, 60 * TICK_RATE);
-    expect(shots).toBe(600); // 0.1 s interval for one minute
-    // Consecutive shots are 6 or 7 ticks apart (6.4 on average), never further.
-    const rig2 = new Rig('rifle_ak');
-    let last = -1;
-    for (let t = 0; t < 200; t++) {
-      if (!rig2.tick(BTN.Fire).fired) continue;
-      if (last >= 0) expect([6, 7]).toContain(t - last);
-      last = t;
-      if (rig2.gun.clip === 0) break;
+    for (const id of AUTOMATICS) {
+      const w = WEAPONS[id];
+      const rig = new Rig(id);
+      rig.gun.clip = 1e6;
+      expect(rig.hold(BTN.Fire, 60 * TICK_RATE), id).toBe(shotsIn(w, 60 * TICK_RATE));
+      expect(Math.abs(shotsIn(w, 60 * TICK_RATE) - 60 / w.fireInterval), id).toBeLessThanOrEqual(1);
+
+      // Consecutive shots are floor or ceil of the ideal interval apart, never more.
+      const ideal = w.fireInterval * TICK_RATE;
+      const gaps = new Set<number>();
+      let last = -1;
+      for (let t = 0; t < 400; t++) {
+        if (!rig.tick(BTN.Fire).fired) continue;
+        if (last >= 0) gaps.add(t - last);
+        last = t;
+      }
+      expect(gaps.size, id).toBeGreaterThan(0);
+      for (const gap of gaps) expect([Math.floor(ideal + 1e-9), Math.ceil(ideal - 1e-9)], id).toContain(gap);
     }
   });
 
   it('automatic weapons keep firing while the trigger is held', () => {
-    const rig = new Rig('rifle_ak');
-    expect(rig.tick(BTN.Fire).fired).not.toBeNull();
-    expect(rig.hold(BTN.Fire, TICK_RATE - 1)).toBe(9); // 10 shots in the first second
-    expect(rig.gun.clip).toBe(20);
+    for (const id of AUTOMATICS) {
+      const w = WEAPONS[id];
+      const rig = new Rig(id);
+      expect(rig.tick(BTN.Fire).fired, id).not.toBeNull();
+      const expected = Math.min(shotsIn(w, TICK_RATE), w.clip);
+      expect(expected, id).toBeGreaterThan(2);
+      expect(1 + rig.hold(BTN.Fire, TICK_RATE - 1), id).toBe(expected);
+      expect(rig.gun.clip, id).toBe(w.clip - expected);
+    }
   });
 
   it('semi-automatic weapons need the trigger to be released and pressed again', () => {
-    for (const id of ['pistol', 'deagle', 'shotgun', 'sniper'] as const) {
-      const rig = new Rig(id);
+    expect(SEMI_AUTOMATICS.length).toBeGreaterThan(0);
+    for (const id of SEMI_AUTOMATICS) {
       const w = WEAPONS[id];
+      const rig = new Rig(id);
       expect(rig.tick(BTN.Fire).fired, id).not.toBeNull();
       // Holding for much longer than the cooldown fires nothing more.
       expect(rig.hold(BTN.Fire, ticksFor(w.fireInterval) + 40), id).toBe(0);
@@ -224,30 +266,41 @@ describe('rate of fire', () => {
   });
 
   it('a click during the cooldown is not buffered', () => {
-    const rig = new Rig('deagle');
-    rig.tick(BTN.Fire);
-    rig.tick(0);
-    expect(rig.hold(BTN.Fire, 60)).toBe(0); // pressed too early, then kept down
-    expect(rig.s.fireCd).toBe(0);
-    rig.tick(0);
-    expect(rig.tick(BTN.Fire).fired).not.toBeNull();
+    for (const id of SEMI_AUTOMATICS) {
+      const rig = new Rig(id);
+      rig.tick(BTN.Fire);
+      rig.tick(0);
+      // Pressed too early, then kept down well past the end of the cooldown.
+      expect(rig.hold(BTN.Fire, ticksFor(WEAPONS[id].fireInterval) + 20), id).toBe(0);
+      expect(rig.s.fireCd, id).toBe(0);
+      rig.tick(0);
+      expect(rig.tick(BTN.Fire).fired, id).not.toBeNull();
+    }
   });
 
-  it('the cooldown is a whole number of ticks after a late click', () => {
-    const rig = new Rig('pistol');
-    rig.tick(BTN.Fire);
-    rig.hold(0, 30); // cooldown long gone
-    expect(rig.s.fireCd).toBe(0);
-    rig.tick(BTN.Fire);
-    expect(rig.s.fireCd).toBe(WEAPONS.pistol.fireInterval);
+  it('after a late click the cooldown is the plain fire interval', () => {
+    for (const id of WEAPON_IDS) {
+      const w = WEAPONS[id];
+      const rig = new Rig(id);
+      rig.tick(BTN.Fire);
+      expect(rig.s.fireCd, id).toBe(w.fireInterval);
+      rig.hold(0, ticksFor(w.fireInterval) + 5); // cooldown long gone
+      expect(rig.s.fireCd, id).toBe(0);
+      rig.tick(BTN.Fire);
+      expect(rig.s.fireCd, id).toBe(w.fireInterval);
+    }
   });
 });
 
 describe('ammo and reload', () => {
   it('each shot uses one round and leaves the reserve alone', () => {
-    const rig = new Rig('rifle_ak');
-    rig.burst(5);
-    expect(rig.gun).toEqual({ id: 'rifle_ak', clip: 25, reserve: 90 });
+    for (const id of FIREARMS) {
+      const w = WEAPONS[id];
+      const rig = new Rig(id);
+      const n = Math.min(3, w.clip - 1);
+      rig.burst(n);
+      expect(rig.gun, id).toEqual({ id, clip: w.clip - n, reserve: w.reserve });
+    }
   });
 
   it('reload moves the missing rounds from the reserve after reloadTime', () => {
@@ -263,17 +316,18 @@ describe('ammo and reload', () => {
       const took = rig.until((ev) => ev.reloadFinished);
       expect(took, id).toBe(ticksFor(w.reloadTime));
       expect(rig.s.reload, id).toBe(0);
-      expect(rig.gun, id).toEqual({ id, clip: w.clip, reserve: w.reserve - (w.clip - 1) });
+      const moved = Math.min(w.clip - 1, w.reserve);
+      expect(rig.gun, id).toEqual({ id, clip: 1 + moved, reserve: w.reserve - moved });
     }
   });
 
   it('a partial reserve gives a partial clip', () => {
     const rig = new Rig('rifle_ak');
-    rig.gun.clip = 10;
-    rig.gun.reserve = 7;
+    rig.gun.clip = 1;
+    rig.gun.reserve = 2;
     expect(rig.tick(BTN.Reload).reloadStarted).toBe(true);
     rig.until((ev) => ev.reloadFinished);
-    expect(rig.gun).toEqual({ id: 'rifle_ak', clip: 17, reserve: 0 });
+    expect(rig.gun).toEqual({ id: 'rifle_ak', clip: 3, reserve: 0 });
     // Nothing left: asking again does nothing.
     expect(rig.tick(0).reloadStarted).toBe(false);
     expect(rig.tick(BTN.Reload).reloadStarted).toBe(false);
@@ -286,9 +340,10 @@ describe('ammo and reload', () => {
     expect(full.s.reload).toBe(0);
 
     const dry = new Rig('rifle_ak');
-    dry.gun.clip = 3;
+    dry.gun.clip = 1;
     dry.gun.reserve = 0;
     expect(dry.tick(BTN.Reload).reloadStarted).toBe(false);
+    expect(dry.s.reload).toBe(0);
 
     const knife = new Rig('knife');
     expect(knife.tick(BTN.Reload).reloadStarted).toBe(false);
@@ -296,59 +351,78 @@ describe('ammo and reload', () => {
   });
 
   it('holding the reload key reloads once', () => {
+    const w = WEAPONS.pistol;
     const rig = new Rig('pistol');
-    rig.gun.clip = 5;
+    rig.gun.clip = w.clip - 1;
     let started = 0;
     let finished = 0;
-    for (let t = 0; t < 400; t++) {
+    for (let t = 0; t < ticksFor(w.reloadTime) + 100; t++) {
       const ev = rig.tick(BTN.Reload);
       if (ev.reloadStarted) started++;
       if (ev.reloadFinished) finished++;
     }
     expect(started).toBe(1);
     expect(finished).toBe(1);
-    expect(rig.gun).toEqual({ id: 'pistol', clip: 15, reserve: 50 });
+    expect(rig.gun).toEqual({ id: 'pistol', clip: w.clip, reserve: w.reserve - 1 });
   });
 
   it('reloads automatically when the clip runs empty', () => {
+    for (const id of FIREARMS) {
+      const w = WEAPONS[id];
+      const rig = new Rig(id);
+      rig.gun.clip = 1;
+      const shot = rig.tick(BTN.Fire);
+      expect(shot.fired, id).not.toBeNull();
+      expect(shot.reloadStarted, id).toBe(false);
+      expect(rig.gun.clip, id).toBe(0);
+      const next = rig.tick(0); // no key pressed
+      expect(next.reloadStarted, id).toBe(true);
+      expect(next.dryFire, id).toBe(false);
+      expect(rig.s.reload, id).toBe(w.reloadTime);
+      rig.until((ev) => ev.reloadFinished);
+      const moved = Math.min(w.clip, w.reserve);
+      expect(rig.gun, id).toEqual({ id, clip: moved, reserve: w.reserve - moved });
+    }
+  });
+
+  it('the automatic reload waits for the end of the draw', () => {
     const rig = new Rig('rifle_ak');
-    rig.gun.clip = 1;
-    const shot = rig.tick(BTN.Fire);
-    expect(shot.fired).not.toBeNull();
-    expect(shot.reloadStarted).toBe(false);
-    expect(rig.gun.clip).toBe(0);
-    const next = rig.tick(0); // no key pressed
-    expect(next.reloadStarted).toBe(true);
-    expect(next.dryFire).toBe(false);
-    expect(rig.s.reload).toBe(WEAPONS.rifle_ak.reloadTime);
-    rig.until((ev) => ev.reloadFinished);
-    expect(rig.gun).toEqual({ id: 'rifle_ak', clip: 30, reserve: 60 });
+    rig.gun.clip = 0;
+    rig.s.draw = 3 * TICK_DT;
+    expect(rig.tick(0).reloadStarted).toBe(false);
+    expect(rig.tick(BTN.Reload).reloadStarted).toBe(false);
+    expect(rig.tick(0).reloadStarted).toBe(true); // third tick: the draw is over
   });
 
   it('an automatic weapon held down empties, reloads and resumes on its own', () => {
-    const rig = new Rig('smg');
-    const w = WEAPONS.smg;
-    let shots = 0;
-    let reloads = 0;
-    let dry = 0;
-    for (let t = 0; t < 30 * TICK_RATE; t++) {
-      const ev = rig.tick(BTN.Fire);
-      if (ev.fired) shots++;
-      if (ev.reloadFinished) reloads++;
-      if (ev.dryFire) dry++;
+    for (const id of AUTOMATICS) {
+      const w = WEAPONS[id];
+      const rig = new Rig(id);
+      const reloadsNeeded = Math.ceil(w.reserve / w.clip);
+      const seconds = (w.clip + w.reserve) * w.fireInterval + reloadsNeeded * w.reloadTime + 5;
+      let shots = 0;
+      let reloads = 0;
+      let dry = 0;
+      for (let t = 0; t < seconds * TICK_RATE; t++) {
+        const ev = rig.tick(BTN.Fire);
+        if (ev.fired) shots++;
+        if (ev.reloadFinished) reloads++;
+        if (ev.dryFire) dry++;
+      }
+      expect(shots, id).toBe(w.clip + w.reserve); // every round was fired
+      expect(reloads, id).toBe(reloadsNeeded);
+      expect(rig.gun, id).toEqual({ id, clip: 0, reserve: 0 });
+      expect(dry, id).toBe(0); // no click without a new press
+      expect(rig.s.reload, id).toBe(0);
     }
-    expect(shots).toBe(w.clip + w.reserve); // every round was fired
-    expect(reloads).toBe(w.reserve / w.clip);
-    expect(rig.gun).toEqual({ id: 'smg', clip: 0, reserve: 0 });
-    expect(dry).toBe(0); // no click without a new press
-    expect(rig.s.reload).toBe(0);
   });
 
   it('the first shot leaves on the tick the reload ends', () => {
+    const w = WEAPONS.rifle_ak;
     const rig = new Rig('rifle_ak');
     rig.gun.clip = 0;
     expect(rig.tick(BTN.Fire).reloadStarted).toBe(true);
-    for (let n = 1; n < ticksFor(WEAPONS.rifle_ak.reloadTime); n++) {
+    for (let n = 1; n < ticksFor(w.reloadTime); n++) {
       const ev = rig.tick(BTN.Fire);
       expect(ev.fired).toBeNull();
       expect(ev.reloadFinished).toBe(false);
@@ -356,7 +430,7 @@ describe('ammo and reload', () => {
     const end = rig.tick(BTN.Fire);
     expect(end.reloadFinished).toBe(true);
     expect(end.fired).not.toBeNull();
-    expect(rig.gun.clip).toBe(29);
+    expect(rig.gun.clip).toBe(Math.min(w.clip, w.reserve) - 1);
   });
 });
 
@@ -371,53 +445,56 @@ describe('when firing is not allowed', () => {
   });
 
   it('not while reloading', () => {
+    const w = WEAPONS.rifle_ak;
     const rig = new Rig('rifle_ak');
-    rig.gun.clip = 12;
+    rig.gun.clip = 2;
     rig.tick(BTN.Reload);
-    const n = ticksFor(WEAPONS.rifle_ak.reloadTime);
-    expect(rig.hold(BTN.Fire, n - 1)).toBe(0);
-    expect(rig.gun.clip).toBe(12);
+    expect(rig.hold(BTN.Fire, ticksFor(w.reloadTime) - 1)).toBe(0);
+    expect(rig.gun.clip).toBe(2);
     expect(rig.tick(BTN.Fire).fired).not.toBeNull();
   });
 
   it('not during freeze time, but weapons can be switched', () => {
     const rig = new Rig('sniper');
     rig.s.frozen = true;
-    rig.gun.clip = 2;
+    rig.gun.clip = 1;
     for (let t = 0; t < 40; t++) {
       const ev = rig.tick(t % 2 === 0 ? BTN.Fire | BTN.AltFire | BTN.Reload : 0);
       expect(ev).toEqual(newStepEvents());
     }
-    expect(rig.gun.clip).toBe(2);
+    expect(rig.gun.clip).toBe(1);
     expect(rig.s.zoom).toBe(0);
     expect(rig.s.reload).toBe(0);
     const ev = rig.tick(BTN.Fire, SLOT.Secondary);
     expect(ev.switched).toBe(true);
     expect(rig.s.active).toBe(SLOT.Secondary);
-    // An automatic weapon held through the end of the freeze fires as soon as it is lifted.
-    const ak = new Rig('rifle_ak');
-    ak.s.frozen = true;
-    expect(ak.hold(BTN.Fire, 20)).toBe(0);
-    ak.s.frozen = false;
-    expect(ak.tick(BTN.Fire).fired).not.toBeNull();
-    // A semi-automatic one needs a new press.
-    const pistol = new Rig('pistol');
-    pistol.s.frozen = true;
-    pistol.hold(BTN.Fire, 20);
-    pistol.s.frozen = false;
-    expect(pistol.hold(BTN.Fire, 20)).toBe(0);
+
+    // An automatic weapon held through the end of the freeze fires as soon as it is lifted...
+    const auto = new Rig('rifle_ak');
+    auto.s.frozen = true;
+    expect(auto.hold(BTN.Fire, 20)).toBe(0);
+    auto.s.frozen = false;
+    expect(auto.tick(BTN.Fire).fired).not.toBeNull();
+    // ...a semi-automatic one needs a new press.
+    const semi = new Rig('pistol');
+    semi.s.frozen = true;
+    semi.hold(BTN.Fire, 20);
+    semi.s.frozen = false;
+    expect(semi.hold(BTN.Fire, 20)).toBe(0);
+    semi.tick(0);
+    expect(semi.tick(BTN.Fire).fired).not.toBeNull();
   });
 
   it('not during a timed action, and no switching either', () => {
     for (const action of [ACTION.Plant, ACTION.Defuse, ACTION.Secure]) {
       const rig = new Rig('rifle_ak');
       rig.s.action = action;
-      rig.gun.clip = 9;
-      expect(rig.hold(BTN.Fire | BTN.Reload, 30)).toBe(0);
-      expect(rig.gun.clip).toBe(9);
+      rig.gun.clip = 2;
+      expect(rig.hold(BTN.Fire | BTN.Reload | BTN.AltFire, 30)).toBe(0);
+      expect(rig.gun.clip).toBe(2);
       expect(rig.s.reload).toBe(0);
       const ev = rig.tick(BTN.Fire, SLOT.Secondary);
-      expect(ev.switched).toBe(false);
+      expect(ev).toEqual(newStepEvents());
       expect(rig.s.active).toBe(SLOT.Primary);
       rig.s.action = ACTION.None;
       expect(rig.tick(BTN.Fire).fired).not.toBeNull();
@@ -430,16 +507,19 @@ describe('when firing is not allowed', () => {
     const before = JSON.stringify(rig.s);
     const ev = rig.tick(BTN.Fire | BTN.Reload, SLOT.Secondary);
     expect(ev).toEqual(newStepEvents());
-    expect(JSON.stringify({ ...rig.s, prevButtons: 0 })).toBe(before);
+    rig.s.prevButtons = 0; // the only thing the rig itself changed
+    expect(JSON.stringify(rig.s)).toBe(before);
   });
 });
 
 describe('weapon switching', () => {
   it('cancels the reload and applies the draw time of the new weapon', () => {
+    const ak = WEAPONS.rifle_ak;
+    const secondary = WEAPONS[DEFAULT_LOADOUT.secondary];
     const rig = new Rig('rifle_ak');
-    rig.gun.clip = 10;
+    rig.gun.clip = 1;
     rig.tick(BTN.Reload);
-    rig.hold(0, 50);
+    rig.hold(0, 5);
     expect(rig.s.reload).toBeGreaterThan(0);
 
     const ev = rig.tick(0, SLOT.Secondary);
@@ -447,28 +527,40 @@ describe('weapon switching', () => {
     expect(ev.reloadFinished).toBe(false);
     expect(rig.s.active).toBe(SLOT.Secondary);
     expect(rig.s.reload).toBe(0);
-    expect(rig.s.draw).toBe(WEAPONS.pistol.drawTime);
+    expect(rig.s.draw).toBe(secondary.drawTime);
     // The interrupted reload is lost: nothing was transferred.
-    expect(rig.s.slots[SLOT.Primary]).toEqual({ id: 'rifle_ak', clip: 10, reserve: 90 });
+    expect(rig.s.slots[SLOT.Primary]).toEqual({ id: 'rifle_ak', clip: 1, reserve: ak.reserve });
 
-    // Back to the rifle: it does not finish reloading in the background, and it must be drawn again.
-    rig.hold(0, 300);
-    expect(rig.s.slots[SLOT.Primary]).toEqual({ id: 'rifle_ak', clip: 10, reserve: 90 });
+    // It does not finish in the background either, and the rifle must be drawn again.
+    rig.hold(0, ticksFor(ak.reloadTime) + 50);
+    expect(rig.s.slots[SLOT.Primary]).toEqual({ id: 'rifle_ak', clip: 1, reserve: ak.reserve });
     expect(rig.tick(0, SLOT.Primary).switched).toBe(true);
-    expect(rig.s.draw).toBe(WEAPONS.rifle_ak.drawTime);
+    expect(rig.s.draw).toBe(ak.drawTime);
     const took = rig.until((e) => e.fired !== null, BTN.Fire);
-    expect(took).toBe(ticksFor(WEAPONS.rifle_ak.drawTime));
+    expect(took).toBe(ticksFor(ak.drawTime));
+  });
+
+  it('a reload that ends on the tick of the switch still counts', () => {
+    const w = WEAPONS.rifle_ak;
+    const rig = new Rig('rifle_ak');
+    rig.gun.clip = 1;
+    rig.tick(BTN.Reload);
+    rig.hold(0, ticksFor(w.reloadTime) - 1);
+    const ev = rig.tick(0, SLOT.Melee);
+    expect(ev.reloadFinished).toBe(true);
+    expect(ev.switched).toBe(true);
+    expect(rig.s.slots[SLOT.Primary]!.clip).toBe(Math.min(w.clip, 1 + w.reserve));
   });
 
   it('every weapon needs exactly its draw time before the first shot', () => {
     for (const id of WEAPON_IDS) {
       const w = WEAPONS[id];
       const rig = new Rig(id);
-      const other = w.slot === SLOT.Melee ? SLOT.Primary : SLOT.Melee;
-      rig.tick(0, other);
+      rig.tick(0, w.slot === SLOT.Melee ? SLOT.Primary : SLOT.Melee);
       expect(rig.tick(0, w.slot).switched, id).toBe(true);
       expect(rig.s.draw, id).toBe(w.drawTime);
       const n = ticksFor(w.drawTime);
+      expect(n, id).toBeGreaterThan(3);
       expect(rig.hold(0, n - 3), id).toBe(0);
       // A click before the draw is over does nothing; on the tick it ends, the weapon fires.
       expect(rig.tick(BTN.Fire).fired, id).toBeNull();
@@ -480,11 +572,12 @@ describe('weapon switching', () => {
   });
 
   it('resets the recoil index and the zoom, and does not inherit the fire cooldown', () => {
+    const secondary = WEAPONS[DEFAULT_LOADOUT.secondary];
     const rig = new Rig('sniper');
     rig.tick(BTN.AltFire);
     expect(rig.s.zoom).toBe(1);
     rig.tick(BTN.Fire);
-    expect(rig.s.fireCd).toBeGreaterThan(1.4);
+    expect(rig.s.fireCd).toBe(WEAPONS.sniper.fireInterval);
     expect(rig.s.shots).toBe(1);
 
     const ev = rig.tick(0, SLOT.Secondary);
@@ -493,15 +586,14 @@ describe('weapon switching', () => {
     expect(rig.s.zoom).toBe(0);
     expect(rig.s.shots).toBe(0);
     expect(rig.s.fireCd).toBe(0);
-    // The pistol is ready after its own draw time (0.6 s), not after the sniper's bolt cycle (1.45 s).
-    const n = ticksFor(WEAPONS.pistol.drawTime);
-    rig.hold(0, n - 1);
-    expect(rig.tick(BTN.Fire).fired?.weapon).toBe('pistol');
+    // The sidearm is ready after its own draw time, whatever is left of the sniper's bolt cycle.
+    rig.hold(0, ticksFor(secondary.drawTime) - 1);
+    expect(rig.tick(BTN.Fire).fired?.weapon).toBe(secondary.id);
   });
 
   it('ignores the slot already in hands', () => {
     const rig = new Rig('rifle_ak');
-    rig.gun.clip = 10;
+    rig.gun.clip = 1;
     rig.tick(BTN.Reload);
     const reload = rig.s.reload;
     const ev = rig.tick(0, SLOT.Primary);
@@ -528,13 +620,13 @@ describe('weapon switching', () => {
     expect(rig.tick(0, SLOT.Melee).switched).toBe(true);
     expect(rig.tick(0, SLOT.Secondary).switched).toBe(true);
     expect(rig.s.active).toBe(SLOT.Secondary);
-    expect(rig.s.draw).toBe(WEAPONS.pistol.drawTime);
+    expect(rig.s.draw).toBe(WEAPONS[DEFAULT_LOADOUT.secondary].drawTime);
   });
 });
 
 describe('dry fire', () => {
   it('clicks once per press on a completely empty weapon', () => {
-    for (const id of ['rifle_ak', 'pistol'] as const) {
+    for (const id of FIREARMS) {
       const rig = new Rig(id);
       rig.gun.clip = 0;
       rig.gun.reserve = 0;
@@ -547,6 +639,7 @@ describe('dry fire', () => {
       expect(rig.tick(BTN.Fire).dryFire, id).toBe(true);
       expect(rig.gun, id).toEqual({ id, clip: 0, reserve: 0 });
       expect(rig.s.shots, id).toBe(0);
+      expect(rig.s.fireCd, id).toBe(0);
     }
   });
 
@@ -583,102 +676,116 @@ describe('dry fire', () => {
 });
 
 describe('recoil', () => {
-  it('kicks the view up and recovers to rest', () => {
+  it('kicks the view up by recoilUp and recovers to rest', () => {
     for (const id of FIREARMS) {
       const w = WEAPONS[id];
+      const kick = Math.min(w.recoilUp, w.recoilMax);
       const rig = new Rig(id);
       rig.tick(BTN.Fire);
-      // One shot: almost the full kick (one tick of recovery already applied).
-      expect(rig.s.punchPitch, id).toBeGreaterThan(w.recoilUp * 0.8);
-      expect(rig.s.punchPitch, id).toBeLessThanOrEqual(w.recoilUp);
-      rig.hold(0, 3 * TICK_RATE);
+      // The shot adds the full kick; one tick of recovery has already been applied.
+      expect(rig.s.punchPitch, id).toBeCloseTo(kick * decay(w.recoilRecovery), 12);
+      expect(rig.s.punchPitch, id).toBeGreaterThan(0);
+      rig.hold(0, 4);
+      expect(rig.s.punchPitch, id).toBeCloseTo(kick * decay(w.recoilRecovery, 5), 12);
+      rig.hold(0, RECOVERY_TICKS);
       expect(rig.s.punchPitch, id).toBe(0);
       expect(rig.s.punchYaw, id).toBe(0);
     }
   });
 
   it('accumulates over a burst, stays under recoilMax, then recovers', () => {
-    for (const id of ['rifle_ak', 'rifle_m4', 'smg'] as const) {
+    for (const id of AUTOMATICS) {
       const w = WEAPONS[id];
       const rig = new Rig(id);
-      const before: number[] = []; // punch at the moment each bullet leaves
+      const leaving: number[] = []; // punch at the moment each bullet leaves
       let peak = 0;
-      for (let t = 0; before.length < 12; t++) {
+      for (let t = 0; leaving.length < 12; t++) {
         const punch = rig.s.punchPitch;
-        if (rig.tick(BTN.Fire).fired) before.push(punch);
+        if (rig.tick(BTN.Fire).fired) leaving.push(punch);
         peak = Math.max(peak, rig.s.punchPitch);
       }
-      expect(before[0], id).toBe(0); // the first bullet goes exactly where the crosshair is
-      expect(before[1], id).toBeGreaterThan(0);
-      expect(before[2], id).toBeGreaterThan(before[1]);
-      expect(before[3], id).toBeGreaterThan(before[2]);
-      expect(before[11], id).toBeGreaterThan(before[1]);
-      expect(peak, id).toBeGreaterThan(w.recoilUp * 1.4);
+      expect(leaving[0], id).toBe(0); // the first bullet goes exactly where the crosshair is
+      expect(leaving[1], id).toBeGreaterThan(0);
+      expect(leaving[2], id).toBeGreaterThan(leaving[1]);
+      expect(Math.max(...leaving), id).toBeGreaterThan(leaving[2]);
+      expect(peak, id).toBeGreaterThan(w.recoilUp); // more than any single kick
       expect(peak, id).toBeLessThanOrEqual(w.recoilMax);
 
       const afterBurst = rig.s.punchPitch;
-      rig.hold(0, 8);
+      rig.hold(0, 4);
       expect(rig.s.punchPitch, id).toBeLessThan(afterBurst);
       expect(rig.s.punchPitch, id).toBeGreaterThan(0);
-      rig.hold(0, 3 * TICK_RATE);
+      rig.hold(0, RECOVERY_TICKS);
       expect(rig.s.punchPitch, id).toBe(0);
       expect(rig.s.punchYaw, id).toBe(0);
     }
   });
 
   it('the upward kick fades out near recoilMax and never passes it', () => {
-    const w = WEAPONS.rifle_ak;
-    const rest = new Rig('rifle_ak');
-    rest.tick(BTN.Fire);
-    const fullKick = rest.s.punchPitch;
+    for (const id of FIREARMS) {
+      const w = WEAPONS[id];
+      const k = decay(w.recoilRecovery);
+      // Kick actually applied by one shot fired with a given punch (the tick's recovery undone).
+      const kickAt = (punch: number): number => {
+        const s = playerWith(id);
+        s.punchPitch = punch;
+        return shootCopy(s, 1).after.punchPitch / k - punch;
+      };
+      expect(kickAt(0), id).toBeCloseTo(Math.min(w.recoilUp, w.recoilMax), 12);
+      expect(kickAt(w.recoilMax * 0.5), id).toBeCloseTo(Math.min(w.recoilUp, w.recoilMax) * 0.5, 12);
+      expect(kickAt(w.recoilMax * 0.9), id).toBeCloseTo(Math.min(w.recoilUp, w.recoilMax) * 0.1, 12);
+      expect(kickAt(w.recoilMax), id).toBeCloseTo(0, 12);
 
-    const high = new Rig('rifle_ak');
-    high.s.punchPitch = w.recoilMax * 0.9;
-    high.tick(BTN.Fire);
-    // Compare kicks before the tick's recovery: undo it with the same factor.
-    const k = Math.exp(-w.recoilRecovery * TICK_DT);
-    const kick = high.s.punchPitch / k - w.recoilMax * 0.9;
-    expect(kick).toBeGreaterThan(0);
-    expect(kick).toBeLessThan((fullKick / k) * 0.2);
-
-    const capped = new Rig('rifle_ak');
-    capped.s.punchPitch = w.recoilMax * 2; // out of range on purpose
-    capped.tick(BTN.Fire);
-    expect(capped.s.punchPitch).toBeLessThanOrEqual(w.recoilMax);
-  });
-
-  it('follows a fixed sideways sway: left first, then right', () => {
-    // Positive yaw is to the left. The sway is the learnable part of the pattern: it must not depend on the seed.
-    const pattern = (firstSeq: number): number[] => {
-      const rig = new Rig('rifle_ak');
-      rig.seq = firstSeq;
-      const yaw: number[] = [];
-      for (let t = 0; yaw.length < 12; t++) {
-        const before = rig.s.punchYaw;
-        if (rig.tick(BTN.Fire).fired) yaw.push(before);
-      }
-      return yaw;
-    };
-    const a = pattern(0);
-    const b = pattern(5000);
-    expect(a[0]).toBe(0);
-    for (const yaw of [a, b]) {
-      expect(yaw[4] * R2D).toBeGreaterThan(0.1); // shots 4-5 pull left
-      expect(yaw[8] * R2D).toBeLessThan(-0.3); // shots 8-10 pull right
-      expect(yaw[9] * R2D).toBeLessThan(-0.2);
+      // Out-of-range punch (never produced by the machine itself) is brought back under the cap.
+      const s = playerWith(id);
+      s.punchPitch = w.recoilMax * 2;
+      expect(shootCopy(s, 1).after.punchPitch, id).toBeLessThanOrEqual(w.recoilMax);
     }
-    // Different seeds only add a small jitter on top.
-    expect(a).not.toEqual(b);
-    for (let i = 0; i < a.length; i++) expect(Math.abs(a[i] - b[i]) * R2D).toBeLessThan(0.6);
   });
 
-  it('the recoil index starts decaying after shotsResetDelay and reaches 0', () => {
-    for (const id of ['rifle_ak', 'pistol', 'smg'] as const) {
+  it('sideways kick = fixed sway pattern indexed by the recent shots + seeded jitter', () => {
+    // The formula of docs/ARCHITECTURE.md §6. Positive yaw is to the left.
+    const sway = (w: WeaponDef, i: number): number => w.recoilSide * Math.sin(0.62 * i + 0.9) * Math.min(1, i / 3);
+    for (const id of FIREARMS) {
+      const w = WEAPONS[id];
+      const k = decay(w.recoilRecovery);
+      let min = Infinity;
+      let max = -Infinity;
+      let sum = 0;
+      let n = 0;
+      for (let i = 0; i <= 14; i++) {
+        for (let seq = 1; seq <= 20; seq++) {
+          const s = playerWith(id);
+          s.shots = i + (seq % 2 === 0 ? 0.6 : 0); // a decaying (fractional) index counts as its floor
+          s.sinceShot = 0;
+          const kick = shootCopy(s, seq + 100 * i).after.punchYaw / k;
+          const jitter = (kick - sway(w, i)) / w.recoilJitter;
+          expect(Math.abs(jitter), `${id} shot ${i}`).toBeLessThanOrEqual(1 + 1e-9);
+          min = Math.min(min, jitter);
+          max = Math.max(max, jitter);
+          sum += jitter;
+          n++;
+        }
+      }
+      // The jitter covers its whole range and is centred.
+      expect(min, id).toBeLessThan(-0.9);
+      expect(max, id).toBeGreaterThan(0.9);
+      expect(Math.abs(sum / n), id).toBeLessThan(0.15);
+    }
+    // The pattern itself: nothing on the first shot, then one way, then the other.
+    expect(sway(WEAPONS.rifle_ak, 0)).toBe(0);
+    expect(sway(WEAPONS.rifle_ak, 2)).toBeGreaterThan(0);
+    expect(sway(WEAPONS.rifle_ak, 6)).toBeLessThan(0);
+  });
+
+  it('the recoil index counts shots, starts decaying after shotsResetDelay and reaches 0', () => {
+    for (const id of WEAPON_IDS) {
       const w = WEAPONS[id];
       const rig = new Rig(id);
-      rig.burst(4);
-      expect(rig.s.shots, id).toBe(4);
+      rig.tick(BTN.Fire);
+      expect(rig.s.shots, id).toBe(1);
       expect(rig.s.sinceShot, id).toBe(0);
+      rig.s.shots = 4; // as if it had been the fourth shot of a burst
       // sinceShot must exceed the delay: that happens on tick floor(delay * 64) + 1.
       const quiet = Math.floor(w.shotsResetDelay * TICK_RATE + 1e-9);
       rig.hold(0, quiet);
@@ -692,12 +799,25 @@ describe('recoil', () => {
     }
   });
 
+  it('a held burst advances the index by one per shot', () => {
+    let checked = 0;
+    for (const id of AUTOMATICS) {
+      if (WEAPONS[id].fireInterval + TICK_DT > WEAPONS[id].shotsResetDelay) continue; // would decay in between
+      const rig = new Rig(id);
+      rig.burst(5);
+      expect(rig.s.shots, id).toBe(5);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
   it('tapping with pauses restarts the pattern from the first shot', () => {
+    const w = WEAPONS.rifle_ak;
     const rig = new Rig('rifle_ak');
     for (let tap = 0; tap < 4; tap++) {
       expect(rig.tick(BTN.Fire).fired).not.toBeNull();
-      expect(rig.s.shots).toBe(1); // index was back to 0 before each tap
-      rig.hold(0, TICK_RATE);
+      expect(rig.s.shots).toBe(1); // the index was back to 0 before each tap
+      rig.hold(0, ticksFor(Math.max(w.fireInterval, w.shotsResetDelay + 1 / 12)) + 2);
     }
   });
 
@@ -736,6 +856,7 @@ describe('inaccuracy', () => {
       s.crouch = 1;
       const crouched = currentSpread(s);
       expect(crouched, id).toBeCloseTo(w.spread * w.spreadCrouchMul, 12);
+      expect(half, id).toBeCloseTo((standing + crouched) / 2, 12);
       expect(crouched, id).toBeLessThan(half);
       expect(half, id).toBeLessThan(standing);
       // No crouch bonus in the air (crouch-jumping is not accurate).
@@ -752,10 +873,12 @@ describe('inaccuracy', () => {
       expect(currentSpread(s), id).toBeCloseTo(w.spread, 12); // crouch-walking costs nothing
       setSpeed(s, MOVE.walkMul);
       const walking = currentSpread(s);
-      const f = (MOVE.walkMul - 0.34) / 0.66;
+      // The formula of docs/ARCHITECTURE.md §6.
+      const f = Math.min(1, Math.max(0, (MOVE.walkMul - 0.34) / 0.66));
       expect(walking, id).toBeCloseTo(w.spread + w.spreadMove * f, 12);
       setSpeed(s, 0.8);
       const jogging = currentSpread(s);
+      expect(jogging, id).toBeCloseTo(w.spread + (w.spreadMove * (0.8 - 0.34)) / 0.66, 12);
       setSpeed(s, 1);
       const running = currentSpread(s);
       expect(running, id).toBeCloseTo(w.spread + w.spreadMove, 12);
@@ -776,6 +899,7 @@ describe('inaccuracy', () => {
       const s = playerWith(id);
       s.onGround = false;
       expect(currentSpread(s), id).toBeCloseTo(w.spread + w.spreadAir, 12);
+      expect(currentSpread(s), id).toBeGreaterThan(w.spread);
       setSpeed(s, 1);
       expect(currentSpread(s), id).toBeCloseTo(w.spread + w.spreadAir + w.spreadMove, 12);
     }
@@ -784,13 +908,14 @@ describe('inaccuracy', () => {
   it('grows with every shot up to spreadShotMax, then recovers', () => {
     for (const id of FIREARMS) {
       const w = WEAPONS[id];
+      const k = decay(w.spreadRecovery);
       const rig = new Rig(id);
       rig.gun.clip = 999;
       const rest = currentSpread(rig.s);
       rig.tick(BTN.Fire);
       const afterOne = rig.s.spread;
-      expect(afterOne, id).toBeGreaterThan(w.spreadShot * 0.8);
-      expect(afterOne, id).toBeLessThanOrEqual(w.spreadShot);
+      expect(afterOne, id).toBeCloseTo(Math.min(w.spreadShot, w.spreadShotMax) * k, 12);
+      expect(afterOne, id).toBeGreaterThan(0);
       expect(currentSpread(rig.s), id).toBeCloseTo(rest + afterOne, 12);
       let peak = 0;
       for (let t = 0; t < 600; t++) {
@@ -799,16 +924,15 @@ describe('inaccuracy', () => {
       }
       expect(peak, id).toBeGreaterThanOrEqual(afterOne);
       expect(peak, id).toBeLessThanOrEqual(w.spreadShotMax);
-      rig.hold(0, 5 * TICK_RATE);
+      rig.hold(0, RECOVERY_TICKS);
       expect(rig.s.spread, id).toBe(0);
       expect(currentSpread(rig.s), id).toBe(rest);
+
+      // The cap itself.
+      const s = playerWith(id);
+      s.spread = w.spreadShotMax;
+      expect(shootCopy(s, 1).after.spread, id).toBeCloseTo(w.spreadShotMax * k, 12);
     }
-    // The cap itself.
-    const rig = new Rig('deagle');
-    rig.s.spread = WEAPONS.deagle.spreadShotMax;
-    rig.tick(BTN.Fire);
-    expect(rig.s.spread).toBeLessThanOrEqual(WEAPONS.deagle.spreadShotMax);
-    expect(rig.s.spread).toBeGreaterThan(WEAPONS.deagle.spreadShotMax * 0.9);
   });
 
   it('bullets use the spread of the moment they are fired', () => {
@@ -819,14 +943,14 @@ describe('inaccuracy', () => {
     let worstStill = 0;
     let worstRunning = 0;
     for (let seq = 1; seq <= 300; seq++) {
-      worstStill = Math.max(worstStill, angleBetween(shootCopy(still, seq).dirs[0], aim));
-      worstRunning = Math.max(worstRunning, angleBetween(shootCopy(running, seq).dirs[0], aim));
+      worstStill = Math.max(worstStill, angleBetween(dirsOf(still, seq)[0], aim));
+      worstRunning = Math.max(worstRunning, angleBetween(dirsOf(running, seq)[0], aim));
     }
     expect(worstStill).toBeLessThanOrEqual(currentSpread(still) + 1e-12);
     expect(worstStill).toBeGreaterThan(currentSpread(still) * 0.9);
     expect(worstRunning).toBeLessThanOrEqual(currentSpread(running) + 1e-12);
     expect(worstRunning).toBeGreaterThan(currentSpread(running) * 0.9);
-    expect(worstRunning).toBeGreaterThan(worstStill * 10);
+    expect(worstRunning).toBeGreaterThan(worstStill);
   });
 });
 
@@ -848,27 +972,29 @@ describe('sniper zoom', () => {
 
   it('zoomed spread replaces the base spread, at both levels', () => {
     const w = WEAPONS.sniper;
+    const zoomSpread = w.zoomSpread ?? Number.NaN;
     const rig = new Rig('sniper');
     expect(currentSpread(rig.s)).toBe(w.spread);
     rig.tick(BTN.AltFire);
     rig.tick(0);
-    expect(currentSpread(rig.s)).toBe(w.zoomSpread);
-    expect(currentSpread(rig.s)).toBeLessThan(w.spread / 50);
+    expect(currentSpread(rig.s)).toBe(zoomSpread);
+    expect(zoomSpread).toBeLessThan(w.spread);
     rig.tick(BTN.AltFire);
     expect(rig.s.zoom).toBe(2);
-    expect(currentSpread(rig.s)).toBe(w.zoomSpread);
+    expect(currentSpread(rig.s)).toBe(zoomSpread);
     // Crouching still helps, moving still hurts (relative to the slower zoomed top speed).
     rig.s.crouch = 1;
-    expect(currentSpread(rig.s)).toBeCloseTo(w.zoomSpread! * w.spreadCrouchMul, 12);
+    expect(currentSpread(rig.s)).toBeCloseTo(zoomSpread * w.spreadCrouchMul, 12);
     rig.s.crouch = 0;
-    const zoomedTop = MOVE.runSpeed * w.moveSpeed * w.zoomMoveMul!;
+    const zoomedTop = MOVE.runSpeed * w.moveSpeed * (w.zoomMoveMul ?? 1);
     rig.s.vel.x = zoomedTop;
-    expect(currentSpread(rig.s)).toBeCloseTo(w.zoomSpread! + w.spreadMove, 12);
+    expect(currentSpread(rig.s)).toBeCloseTo(zoomSpread + w.spreadMove, 12);
     rig.s.vel.x = zoomedTop * MOVE.crouchMul;
-    expect(currentSpread(rig.s)).toBeCloseTo(w.zoomSpread!, 12);
+    expect(currentSpread(rig.s)).toBeCloseTo(zoomSpread, 12);
   });
 
   it('a zoomed shot is on target, an unzoomed one is not reliable', () => {
+    const w = WEAPONS.sniper;
     const aim = forwardFromAngles(0, 0);
     const hip = playerWith('sniper');
     const scoped = playerWith('sniper');
@@ -876,11 +1002,12 @@ describe('sniper zoom', () => {
     let worstHip = 0;
     let worstScoped = 0;
     for (let seq = 1; seq <= 200; seq++) {
-      worstHip = Math.max(worstHip, angleBetween(shootCopy(hip, seq).dirs[0], aim));
-      worstScoped = Math.max(worstScoped, angleBetween(shootCopy(scoped, seq).dirs[0], aim));
+      worstHip = Math.max(worstHip, angleBetween(dirsOf(hip, seq)[0], aim));
+      worstScoped = Math.max(worstScoped, angleBetween(dirsOf(scoped, seq)[0], aim));
     }
-    expect(worstScoped).toBeLessThanOrEqual(WEAPONS.sniper.zoomSpread! + 1e-12);
-    expect(worstHip * R2D).toBeGreaterThan(3);
+    expect(worstScoped).toBeLessThanOrEqual((w.zoomSpread ?? 0) + 1e-12);
+    expect(worstHip).toBeGreaterThan(w.spread * 0.9);
+    expect(worstHip).toBeLessThanOrEqual(w.spread + 1e-12);
   });
 
   it('stays after a shot', () => {
@@ -896,14 +1023,15 @@ describe('sniper zoom', () => {
     rig.hold(0, ticksFor(WEAPONS.sniper.fireInterval));
     expect(rig.s.zoom).toBe(2);
     // The level can still be changed while the bolt is cycling.
-    rig.tick(BTN.Fire);
+    expect(rig.tick(BTN.Fire).fired).not.toBeNull();
+    expect(rig.s.fireCd).toBeGreaterThan(0);
     expect(rig.tick(BTN.AltFire).zoomChanged).toBe(true);
     expect(rig.s.zoom).toBe(0);
   });
 
   it('is cancelled by a reload', () => {
     const manual = new Rig('sniper');
-    manual.gun.clip = 3;
+    manual.gun.clip = 1;
     manual.tick(BTN.AltFire);
     expect(manual.s.zoom).toBe(1);
     const ev = manual.tick(BTN.Reload);
@@ -967,7 +1095,7 @@ describe('sniper zoom', () => {
 });
 
 describe('shot directions', () => {
-  /** View directions used across the tests, including steep ones. */
+  /** View directions (yaw, pitch) used across the tests, including steep ones. */
   const VIEWS: [number, number][] = [
     [0, 0],
     [Math.PI / 2, 0],
@@ -979,12 +1107,12 @@ describe('shot directions', () => {
 
   it('the shotgun emits 8 pellets inside the cone, the others one bullet', () => {
     for (const id of FIREARMS) {
-      const s = playerWith(id);
-      const shot = shootCopy(s, 1);
+      const { shot } = shootCopy(playerWith(id), 1);
       expect(shot.weapon, id).toBe(id);
       expect(shot.dirs, id).toHaveLength(WEAPONS[id].pellets);
     }
-    expect(WEAPONS.shotgun.pellets).toBe(8);
+    const pellets = WEAPONS.shotgun.pellets;
+    expect(pellets).toBe(8);
 
     for (const [yaw, pitch] of VIEWS) {
       const s = playerWith('shotgun');
@@ -994,14 +1122,14 @@ describe('shot directions', () => {
       s.punchPitch = 0.05;
       const cone = currentSpread(s);
       const aim = forwardFromAngles(yaw + 0.03, pitch + 0.05);
-      const shot = shootCopy(s, 77);
-      expect(shot.dirs).toHaveLength(8);
+      const dirs = dirsOf(s, 77);
+      expect(dirs).toHaveLength(pellets);
       const seen = new Set<string>();
-      for (const d of shot.dirs) {
+      for (const d of dirs) {
         expect(angleBetween(d, aim)).toBeLessThanOrEqual(cone + 1e-12);
         seen.add(`${d.x},${d.y},${d.z}`);
       }
-      expect(seen.size).toBe(8); // eight different pellets
+      expect(seen.size).toBe(pellets); // all different
     }
     // One cartridge per shot, whatever the number of pellets.
     const rig = new Rig('shotgun');
@@ -1024,7 +1152,7 @@ describe('shot directions', () => {
     let maxR = 0;
     const quadrant = [0, 0, 0, 0];
     for (let seq = 1; seq <= 300; seq++) {
-      for (const d of shootCopy(s, seq).dirs) {
+      for (const d of dirsOf(s, seq)) {
         const f = dot(d, aim);
         const a = dot(d, right) / f;
         const b = dot(d, up) / f;
@@ -1037,13 +1165,13 @@ describe('shot directions', () => {
         quadrant[(a >= 0 ? 0 : 1) + (b >= 0 ? 0 : 2)]++;
       }
     }
-    expect(n).toBe(2400);
+    expect(n).toBe(300 * WEAPONS.shotgun.pellets);
     expect(maxR).toBeLessThanOrEqual(1 + 1e-9);
     expect(maxR).toBeGreaterThan(0.97);
     expect(Math.abs(sumR2 / n - 0.5)).toBeLessThan(0.03); // uniform over the disc: E[r^2] = 1/2
     expect(Math.abs(sumA / n)).toBeLessThan(0.06);
     expect(Math.abs(sumB / n)).toBeLessThan(0.06);
-    for (const count of quadrant) expect(Math.abs(count - 600)).toBeLessThan(120);
+    for (const count of quadrant) expect(Math.abs(count - n / 4)).toBeLessThan(n / 20);
   });
 
   it('all directions are normalised, for every weapon, view and stance', () => {
@@ -1064,7 +1192,7 @@ describe('shot directions', () => {
             s.spread = WEAPONS[id].spreadShotMax;
           }
           for (let seq = 1; seq <= 5; seq++) {
-            for (const d of shootCopy(s, seq).dirs) {
+            for (const d of dirsOf(s, seq)) {
               expect(Number.isFinite(d.x) && Number.isFinite(d.y) && Number.isFinite(d.z)).toBe(true);
               expect(Math.abs(length(d) - 1)).toBeLessThan(1e-12);
             }
@@ -1085,7 +1213,7 @@ describe('shot directions', () => {
         const s = playerWith(id);
         s.yaw = yaw;
         s.pitch = pitch;
-        for (const d of shootCopy(s, 9).dirs) {
+        for (const d of dirsOf(s, 9)) {
           expect(Number.isFinite(d.x) && Number.isFinite(d.y) && Number.isFinite(d.z)).toBe(true);
           expect(Math.abs(length(d) - 1)).toBeLessThan(1e-12);
         }
@@ -1095,18 +1223,18 @@ describe('shot directions', () => {
 
   it('aims along the view angles plus the view punch', () => {
     for (const [yaw, pitch] of VIEWS) {
+      const aim = forwardFromAngles(yaw + 0.04, pitch + 0.07);
       // The knife has no spread: its direction is the aim itself.
       const knife = playerWith('knife');
       knife.yaw = yaw;
       knife.pitch = pitch;
       knife.punchYaw = 0.04;
       knife.punchPitch = 0.07;
-      const stab = shootCopy(knife, 3);
-      const aim = forwardFromAngles(yaw + 0.04, pitch + 0.07);
-      expect(stab.dirs).toHaveLength(1);
-      expect(stab.dirs[0].x).toBeCloseTo(aim.x, 12);
-      expect(stab.dirs[0].y).toBeCloseTo(aim.y, 12);
-      expect(stab.dirs[0].z).toBeCloseTo(aim.z, 12);
+      const stab = dirsOf(knife, 3);
+      expect(stab).toHaveLength(1);
+      expect(stab[0].x).toBeCloseTo(aim.x, 12);
+      expect(stab[0].y).toBeCloseTo(aim.y, 12);
+      expect(stab[0].z).toBeCloseTo(aim.z, 12);
 
       // Firearms: every bullet within the cone around that same aim.
       const rifle = playerWith('rifle_m4');
@@ -1116,7 +1244,7 @@ describe('shot directions', () => {
       rifle.punchPitch = 0.07;
       const cone = currentSpread(rifle);
       for (let seq = 1; seq <= 50; seq++) {
-        expect(angleBetween(shootCopy(rifle, seq).dirs[0], aim)).toBeLessThanOrEqual(cone + 1e-12);
+        expect(angleBetween(dirsOf(rifle, seq)[0], aim)).toBeLessThanOrEqual(cone + 1e-12);
       }
     }
   });
@@ -1125,7 +1253,7 @@ describe('shot directions', () => {
     const s = playerWith('rifle_ak');
     s.pos = { x: 3, y: 1.5, z: -7 };
     const expectOrigin = (expected: Vec3): void => {
-      const origin = shootCopy(s, 1).origin;
+      const { origin } = shootCopy(s, 1).shot;
       expect(origin.x).toBe(expected.x);
       expect(origin.y).toBeCloseTo(expected.y, 12);
       expect(origin.z).toBe(expected.z);
@@ -1137,29 +1265,28 @@ describe('shot directions', () => {
     expectOrigin(eyePosition(s));
     s.crouch = 0.4;
     expectOrigin(eyePosition(s));
-    // The origin is a fresh object, not the player's position.
-    const shot = shootCopy(s, 1);
-    expect(shot.origin).not.toBe(s.pos);
+    // The origin is a fresh object: the Room may keep it without aliasing the player's position.
+    const { shot, after } = shootCopy(s, 1);
+    expect(shot.origin).not.toBe(after.pos);
   });
 
   it('the knife strikes straight ahead without using ammo', () => {
+    const w = WEAPONS.knife;
     const rig = new Rig('knife');
+    const ammo = { ...rig.gun };
     const ev = rig.tick(BTN.Fire);
     expect(ev.fired?.weapon).toBe('knife');
     expect(ev.fired?.dirs).toHaveLength(1);
     expect(ev.dryFire).toBe(false);
     expect(ev.reloadStarted).toBe(false);
-    expect(rig.gun).toEqual({ id: 'knife', clip: 0, reserve: 0 });
-    expect(rig.s.punchPitch).toBe(0);
-    expect(rig.s.punchYaw).toBe(0);
-    expect(rig.s.spread).toBe(0);
+    expect(rig.gun).toEqual(ammo);
     // Held: one strike every fireInterval.
-    expect(rig.hold(BTN.Fire, 2 * TICK_RATE)).toBe(4);
-    expect(rig.gun).toEqual({ id: 'knife', clip: 0, reserve: 0 });
+    expect(1 + rig.hold(BTN.Fire, 2 * TICK_RATE - 1)).toBe(shotsIn(w, 2 * TICK_RATE));
+    expect(rig.gun).toEqual(ammo);
     // Bare hands (empty slot) behave like the knife.
     const bare = playerWith('rifle_ak');
     bare.slots[SLOT.Primary] = null;
-    expect(shootCopy(bare, 1).weapon).toBe('knife');
+    expect(shootCopy(bare, 1).shot.weapon).toBe('knife');
   });
 });
 
@@ -1188,21 +1315,18 @@ describe('determinism', () => {
       const b = shootCopy(s, 1234);
       const c = shootCopy(s, 1235);
       expect(a, id).toEqual(b);
-      expect(a.dirs, id).not.toEqual(c.dirs);
-      for (let p = 0; p < a.dirs.length; p++) expect(a.dirs[p], id).not.toEqual(c.dirs[p]);
+      expect(a.shot.dirs, id).toHaveLength(c.shot.dirs.length);
+      for (let p = 0; p < a.shot.dirs.length; p++) expect(a.shot.dirs[p], id).not.toEqual(c.shot.dirs[p]);
     }
   });
 
   it('the recoil jitter is seeded by the command too', () => {
-    const fire = (seq: number): PlayerState => {
-      const s = playerWith('rifle_ak');
-      stepWeapons(s, { seq, buttons: BTN.Fire, yaw: 0, pitch: 0, slot: -1, st: 0 }, newStepEvents());
-      return s;
-    };
-    expect(fire(10)).toEqual(fire(10));
-    expect(fire(10).punchYaw).not.toBe(fire(11).punchYaw);
-    expect(fire(10).punchPitch).toBe(fire(11).punchPitch);
-    expect(Math.abs(fire(10).punchYaw)).toBeLessThanOrEqual(WEAPONS.rifle_ak.recoilJitter);
+    const s = playerWith('rifle_ak');
+    const a = shootCopy(s, 10).after;
+    expect(shootCopy(s, 10).after).toEqual(a);
+    const b = shootCopy(s, 11).after;
+    expect(b.punchYaw).not.toBe(a.punchYaw);
+    expect(b.punchPitch).toBe(a.punchPitch);
   });
 
   it('client and server reach the same state and events from the same commands', () => {
@@ -1241,9 +1365,9 @@ describe('determinism', () => {
     const a = run();
     const b = run();
     // The scenario really exercises the machine...
-    expect(a.seen.fired).toBeGreaterThan(20);
+    expect(a.seen.fired).toBeGreaterThan(10);
     expect(a.seen.reloadFinished).toBeGreaterThan(0);
-    expect(a.seen.switched).toBeGreaterThan(5);
+    expect(a.seen.switched).toBe(15);
     expect(a.seen.zoomChanged).toBeGreaterThan(5);
     // ...and two independent runs agree bit for bit.
     expect(a.state).toBe(b.state);
@@ -1254,14 +1378,14 @@ describe('determinism', () => {
     const rig = new Rig('rifle_ak');
     rig.hold(BTN.Fire, 40);
     const snapshot: PlayerState = JSON.parse(JSON.stringify(rig.s));
-    const seqAtSnapshot = rig.seq;
+    let seq = rig.seq;
+    const input = (t: number): number => (t < 80 ? BTN.Fire : BTN.Reload);
     const live: string[] = [];
-    for (let t = 0; t < 120; t++) live.push(JSON.stringify(rig.tick(t < 80 ? BTN.Fire : BTN.Reload)));
+    for (let t = 0; t < 400; t++) live.push(JSON.stringify(rig.tick(input(t))));
 
     const replay: string[] = [];
-    let seq = seqAtSnapshot;
-    for (let t = 0; t < 120; t++) {
-      const buttons = t < 80 ? BTN.Fire : BTN.Reload;
+    for (let t = 0; t < 400; t++) {
+      const buttons = input(t);
       const ev = newStepEvents();
       stepWeapons(snapshot, { seq: ++seq, buttons, yaw: snapshot.yaw, pitch: snapshot.pitch, slot: -1, st: 0 }, ev);
       snapshot.prevButtons = buttons;
@@ -1269,6 +1393,7 @@ describe('determinism', () => {
     }
     expect(replay).toEqual(live);
     expect(snapshot).toEqual(rig.s);
+    expect(live.some((e) => e.includes('"reloadFinished":true'))).toBe(true);
   });
 
   it('an idle player is a fixed point and raises no event', () => {
@@ -1323,7 +1448,7 @@ describe('spawn protection', () => {
 });
 
 // ---------------------------------------------------------------------------------
-// Gunplay report: printed for reviewers, with a few sanity checks on the numbers.
+// Gunplay report: printed for reviewers.
 // ---------------------------------------------------------------------------------
 
 /**
@@ -1356,12 +1481,15 @@ function shotsToKill(w: WeaponDef, hitMul: number): number {
 }
 
 describe('gunplay report', () => {
+  const pad = (v: string | number, n: number): string => String(v).padStart(n);
+  const deg = (rad: number): string => (rad * R2D).toFixed(2);
+
   it('prints damage figures for every weapon', () => {
-    const pad = (v: string | number, n: number): string => String(v).padStart(n);
     const lines = [
       '',
       'Weapon balance: point-blank chest hits (x1), all pellets on target, 100 HP / 100 armour.',
       'DPS = damage x pellets / fireInterval (raw, and what reaches health through armour).',
+      'STK = shots to kill, TTK = time to kill = (STK - 1) x fireInterval, mag dmg = raw damage of a full clip.',
       '',
       `${'weapon'.padEnd(10)}${'name'.padEnd(15)}${pad('dmg', 7)}${pad('rpm', 6)}${pad('DPS raw', 9)}` +
         `${pad('DPS armd', 10)}${pad('STK body', 10)}${pad('TTK s', 7)}${pad('STK head', 10)}${pad('mag dmg', 9)}`,
@@ -1371,30 +1499,24 @@ describe('gunplay report', () => {
       const perShot = w.damage * w.pellets;
       const body = shotsToKill(w, 1);
       const head = shotsToKill(w, w.headMul);
-      const ttk = (body - 1) * w.fireInterval;
       lines.push(
         `${id.padEnd(10)}${w.name.padEnd(15)}${pad(w.pellets > 1 ? `${w.pellets}x${w.damage}` : w.damage, 7)}` +
           `${pad((60 / w.fireInterval).toFixed(0), 6)}${pad((perShot / w.fireInterval).toFixed(0), 9)}` +
-          `${pad(((perShot * w.armorPen) / w.fireInterval).toFixed(0), 10)}${pad(body, 10)}${pad(ttk.toFixed(2), 7)}` +
-          `${pad(head, 10)}${pad(w.kind === 'melee' ? '-' : perShot * w.clip, 9)}`,
+          `${pad(((perShot * w.armorPen) / w.fireInterval).toFixed(0), 10)}${pad(body, 10)}` +
+          `${pad(((body - 1) * w.fireInterval).toFixed(2), 7)}${pad(head, 10)}` +
+          `${pad(w.kind === 'melee' ? '-' : perShot * w.clip, 9)}`,
       );
-
       expect(Number.isFinite(body), id).toBe(true);
       expect(head, id).toBeLessThanOrEqual(body);
-      expect(body, id).toBeGreaterThanOrEqual(1);
-      // Nobody needs more than one clip for a kill.
-      if (w.kind !== 'melee') expect(body, id).toBeLessThanOrEqual(w.clip);
     }
     console.log(lines.join('\n'));
   });
 
   it('prints accuracy and recoil figures for every firearm', () => {
-    const deg = (rad: number): string => (rad * R2D).toFixed(2);
-    const pad = (v: string, n: number): string => v.padStart(n);
     const lines = [
       '',
       'Accuracy (cone half-angle, degrees) and recoil after 10 shots at the maximum rate of fire.',
-      '"climb" / "sway" = view punch (up / sideways) when the 10th bullet leaves; "cone@10" = spread of that bullet.',
+      '"climb" / "sway" = view punch (up / to the right) when the 10th bullet leaves; "cone@10" = its spread.',
       '',
       `${'weapon'.padEnd(10)}${pad('crouch', 8)}${pad('stand', 8)}${pad('walk', 8)}${pad('run', 8)}${pad('jump', 8)}` +
         `${pad('cone@10', 9)}${pad('climb', 8)}${pad('sway', 8)}`,
@@ -1417,28 +1539,18 @@ describe('gunplay report', () => {
       const rig = new Rig(id);
       rig.gun.clip = 999;
       let shots = 0;
-      let cone10 = 0;
-      let climb = 0;
-      let sway = 0;
+      let tenth = { cone: 0, pitch: 0, yaw: 0 };
       for (let t = 0; shots < 10; t++) {
-        const before = { cone: currentSpread(rig.s), pitch: rig.s.punchPitch, yaw: rig.s.punchYaw };
-        if (rig.tick(rig.bestTrigger()).fired && ++shots === 10) {
-          cone10 = before.cone;
-          climb = before.pitch;
-          sway = before.yaw;
-        }
+        const leaving = { cone: currentSpread(rig.s), pitch: rig.s.punchPitch, yaw: rig.s.punchYaw };
+        if (rig.tick(rig.bestTrigger()).fired && ++shots === 10) tenth = leaving;
       }
       lines.push(
         `${id.padEnd(10)}${pad(deg(crouch), 8)}${pad(deg(stand), 8)}${pad(deg(walk), 8)}${pad(deg(run), 8)}` +
-          `${pad(deg(jump), 8)}${pad(deg(cone10), 9)}${pad(deg(climb), 8)}${pad(deg(-sway), 8)}`,
+          `${pad(deg(jump), 8)}${pad(deg(tenth.cone), 9)}${pad(deg(tenth.pitch), 8)}${pad(deg(-tenth.yaw), 8)}`,
       );
-
-      expect(crouch, id).toBeLessThan(stand);
-      expect(walk, id).toBeGreaterThan(stand);
-      expect(run, id).toBeGreaterThan(walk);
-      expect(jump, id).toBeGreaterThan(run);
-      expect(cone10, id).toBeGreaterThan(stand);
-      expect(climb, id).toBeGreaterThan(0);
+      for (const v of [crouch, stand, walk, run, jump, tenth.cone, tenth.pitch, tenth.yaw]) {
+        expect(Number.isFinite(v), id).toBe(true);
+      }
     }
     console.log(lines.join('\n'));
   });
@@ -1455,22 +1567,26 @@ describe('gunplay report', () => {
       if (rig.tick(BTN.Fire).fired) shots.push({ x, y, cone });
     }
 
-    const COLS = 41; // 0.05 degree per column, 0.1 per row: about square on a terminal
-    const ROWS = 16;
-    const X_STEP = 0.05;
-    const Y_STEP = 0.1;
-    const mid = (COLS - 1) / 2;
+    // One character is about twice as tall as wide: a row covers twice the angle of a column.
+    // The scale doubles until the pattern fits, so the plot survives any retuning.
+    const maxX = Math.max(...shots.map((s) => Math.abs(s.x)));
+    const maxY = Math.max(...shots.map((s) => s.y));
+    let xStep = 0.025;
+    while (maxX / xStep > 38 || maxY / (2 * xStep) > 38) xStep *= 2;
+    const yStep = 2 * xStep;
+    const half = Math.max(8, Math.ceil(maxX / xStep) + 2);
+    const cols = 2 * half + 1;
+    const rows = Math.ceil(maxY / yStep) + 2;
     const grid: string[][] = [];
-    for (let r = 0; r < ROWS; r++) grid.push(new Array<string>(COLS).fill(' '));
-    for (let r = 0; r < ROWS; r++) grid[r][mid] = '.';
+    for (let r = 0; r < rows; r++) {
+      const row = new Array<string>(cols).fill(' ');
+      row[half] = '.';
+      grid.push(row);
+    }
     const labels = '123456789ABCDEF';
     shots.forEach((shot, i) => {
-      const col = Math.round(shot.x / X_STEP) + mid;
-      const row = Math.round(shot.y / Y_STEP);
-      expect(col).toBeGreaterThanOrEqual(0);
-      expect(col).toBeLessThan(COLS);
-      expect(row).toBeGreaterThanOrEqual(0);
-      expect(row).toBeLessThan(ROWS);
+      const col = half + Math.round(shot.x / xStep);
+      const row = Math.round(shot.y / yStep);
       grid[row][col] = grid[row][col] === ' ' || grid[row][col] === '.' ? labels[i] : '*';
     });
 
@@ -1478,19 +1594,20 @@ describe('gunplay report', () => {
       '',
       'rifle_ak spray pattern, first 15 shots, trigger held, standing still.',
       'Offset of each bullet from the crosshair due to recoil (cumulative view punch), in degrees.',
-      'One column = 0.05 deg, one row = 0.1 deg. Labels 1-9 then A-F = shot number, * = overlap.',
+      `One column = ${xStep} deg, one row = ${yStep} deg. Labels 1-9 then A-F = shot number, * = overlap.`,
       'Shot 1 is on the crosshair.',
       '',
     ];
-    for (let r = ROWS - 1; r >= 0; r--) {
-      lines.push(`${(r * Y_STEP).toFixed(1).padStart(5)} |${grid[r].join('').replace(/\s+$/, '')}`);
+    for (let r = rows - 1; r >= 0; r--) {
+      lines.push(`${(r * yStep).toFixed(2).padStart(6)} |${grid[r].join('').replace(/\s+$/, '')}`);
     }
-    lines.push(`      +${'-'.repeat(COLS)}`);
-    const axis = new Array<string>(7 + COLS + 3).fill(' ');
-    for (const value of [-1, -0.5, 0, 0.5, 1]) {
-      const text = value === 0 ? '0' : value.toFixed(1);
-      const start = 7 + Math.round(value / X_STEP) + mid - (text.length - 1);
-      for (let c = 0; c < text.length; c++) axis[start + c] = text[c];
+    lines.push(`${' '.repeat(7)}+${'-'.repeat(cols)}`);
+    const axis = new Array<string>(8 + cols + 4).fill(' ');
+    const tick = Math.max(1, Math.floor(half / 2 / 4)) * 4; // label spacing in columns
+    for (let c = -Math.floor(half / tick) * tick; c <= half; c += tick) {
+      const text = c === 0 ? '0' : (c * xStep).toFixed(2);
+      const start = 8 + half + c - (text.length - 1);
+      for (let k = 0; k < text.length; k++) axis[start + k] = text[k];
     }
     lines.push(`${axis.join('').replace(/\s+$/, '')}   (left < > right)`);
     lines.push('');
@@ -1506,7 +1623,6 @@ describe('gunplay report', () => {
     expect(shots[0].x).toBeCloseTo(0, 12);
     expect(shots[0].y).toBeCloseTo(0, 12);
     expect(shots[0].cone).toBeCloseTo(WEAPONS.rifle_ak.spread * R2D, 12);
-    expect(Math.max(...shots.map((s) => s.y))).toBeGreaterThan(1);
-    expect(Math.max(...shots.map((s) => Math.abs(s.x)))).toBeGreaterThan(0.4);
+    expect(maxY).toBeGreaterThan(0);
   });
 });

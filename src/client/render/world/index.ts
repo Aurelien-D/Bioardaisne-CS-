@@ -3,8 +3,8 @@
  *
  * Pipeline (each step is synchronous; the engine yields to the event loop between them):
  *   const builder = new WorldBuilder(map, { shader });
- *   builder.collectFaces();   // box faces -> BoxFace records (hidden faces removed)
- *   builder.emitFaces();      // records -> triangles, lighting baked per vertex
+ *   builder.collectFaces();   // box faces -> BoxFace records (hidden parts removed)
+ *   builder.emitFaces();      // records -> watertight triangles, lighting baked per vertex
  *   builder.emitPrims();      // decorative primitives
  *   const world = builder.finish(materials);   // merged meshes in world.group
  *
@@ -13,31 +13,43 @@
  * small materials stay in one mesh to keep the number of draw calls low. Transparent
  * materials always get one mesh per chunk (sorted back to front by the renderer).
  *
- * Light-mapping hook: fill `face.lm` on `builder.faces` between collectFaces() and
- * emitFaces(), pass `lightmapUv1: true` (+ `neutralLightmapUv` for the vertex-lit rest)
- * and call `materials.setLightMap(texture, intensity)`.
+ * Baked lighting (see bake.ts): the baker lists the faces itself and sets `face.lm` on the
+ * light-mapped records, so the engine hands them over instead of calling collectFaces():
+ *   const baked = await bakeLightmapAsync(map, world, { quality }, onProgress);
+ *   const builder = new WorldBuilder(map, { shader: baked.shader, lightmapUv1: true,
+ *                                           neutralLightmapUv: baked.neutralUv });
+ *   builder.faces = baked.faces;          // records with their atlas rectangles
+ *   builder.emitFaces(); builder.emitPrims(); const world = builder.finish(materials);
+ *   materials.setLightMap(createLightmapTexture(baked), baked.intensity);
+ * Records without `lm` (emissive, transparent, `detail` boxes) and prims are lit per vertex
+ * by `shader` and get `neutralLightmapUv`. See faces.ts for the BoxFace record.
  */
 import * as THREE from 'three';
 import { materialInfo, type MaterialId } from '../../../shared/maps/materials';
 import type { MapData } from '../../../shared/maps/types';
-import { collectBoxFaces, emitBoxFace, type BoxFace, type FaceEmitOptions } from './faces';
+import { collectBoxFaces, emitBoxFaces, type BoxFace, type FaceEmitOptions } from './faces';
 import { GeometryWriter, writersToGeometry } from './geom';
 import type { SurfaceShader } from './lighting';
 import type { WorldMaterials } from './materials';
 import { emitPrim } from './prims';
 
-export { collectBoxFaces, emitBoxFace, faceNormal, faceParamS, faceParamT, facePoint, isFittedMaterial } from './faces';
+export { collectBoxFaces, emitBoxFaces, faceNormal, faceParamS, faceParamT, facePoint, isFittedMaterial } from './faces';
 export type { BoxFace, FaceUvMode, LightmapRect } from './faces';
-export { MapLighting, hexToLinear, pointFalloff } from './lighting';
-export type { SurfaceShader } from './lighting';
+export { MapLighting } from './lighting';
+export { hexToLinear, pointFalloff } from './lightmath';
+export type { SurfaceShader } from './lightmath';
 export { WorldMaterials } from './materials';
+export { LIGHTMAP_RANGE, VertexShader, bakeLightmap, bakeLightmapAsync, clearBakeCache, findFaceRecord, lightmapLightAt } from './bake';
+export type { BakeOptions, BakeQuality, BakeResult, BakeStats } from './bake';
+export { LightModel } from './lightmodel';
+export { createLightmapTexture } from './lightmap';
 
 /** Size (m) of the spatial chunks on the XZ plane. */
-export const CHUNK_SIZE = 32;
+export const CHUNK_SIZE = 40;
 /** Materials with fewer triangles than this stay in a single mesh. */
-const SPLIT_TRIANGLES = 6000;
+const SPLIT_TRIANGLES = 4000;
 /** Chunks smaller than this are merged into one "rest" mesh of their material. */
-const MIN_CHUNK_TRIANGLES = 1200;
+const MIN_CHUNK_TRIANGLES = 800;
 /** Default size (m) of the quads lit faces are cut into (vertex-lighting resolution). */
 export const DEFAULT_SUBDIVISION = 2;
 
@@ -54,8 +66,9 @@ export interface WorldBuildOptions {
 
 export interface WorldStats {
   boxes: number;
-  /** Faces actually drawn / faces removed (hidden by `null` or buried in another box). */
+  /** Face records drawn (a clipped face counts once per visible rectangle). */
   faces: number;
+  /** Box faces not drawn at all (overridden with `null` or completely buried). */
   facesCulled: number;
   prims: number;
   meshes: number;
@@ -127,13 +140,13 @@ export class WorldBuilder {
       subdivide: this.opts.subdivide ?? DEFAULT_SUBDIVISION,
       neutralLightmapUv: this.opts.neutralLightmapUv,
     };
-    for (const face of this.faces) {
+    emitBoxFaces(this.faces, emit, (face) => {
       const cu = (face.u0 + face.u1) * 0.5;
       const cv = (face.v0 + face.v1) * 0.5;
       const x = face.axis === 0 ? face.plane : face.uAxis === 0 ? cu : cv;
       const z = face.axis === 2 ? face.plane : face.uAxis === 2 ? cu : cv;
-      emitBoxFace(this.writerFor(face.mat, x, z), face, emit);
-    }
+      return this.writerFor(face.mat, x, z);
+    });
   }
 
   /** Step 3: decorative primitives. */
@@ -195,11 +208,12 @@ export class WorldBuilder {
       }
     }
 
-    const totalFaces = this.map.boxes.length * 6;
+    const drawn = new Set<string>();
+    for (const f of this.faces) drawn.add(`${f.box}${f.name}`);
     return new World(group, this.faces, {
       boxes: this.map.boxes.length,
       faces: this.faces.length,
-      facesCulled: totalFaces - this.faces.length,
+      facesCulled: this.map.boxes.length * 6 - drawn.size,
       prims: this.primCount,
       meshes,
       triangles,

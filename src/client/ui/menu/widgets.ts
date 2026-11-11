@@ -325,9 +325,15 @@ export function notice(tone: 'info' | 'warn' | 'error' | 'success', ...children:
 
 /**
  * Arrow-key navigation inside a list of sibling controls (vertical menus, card
- * grids). Tab still moves in and out of the list.
+ * grids). Tab still moves in and out of the list. With `activate`, moving also
+ * selects the control (radio-group behaviour), except disabled choices.
  */
-export function arrowNav(container: HTMLElement, selector: string, orientation: 'vertical' | 'horizontal' | 'both' = 'vertical'): void {
+export function arrowNav(
+  container: HTMLElement,
+  selector: string,
+  orientation: 'vertical' | 'horizontal' | 'both' = 'vertical',
+  activate = false,
+): void {
   container.addEventListener('keydown', (e) => {
     const prev = orientation !== 'horizontal' && e.key === 'ArrowUp' ? true : orientation !== 'vertical' && e.key === 'ArrowLeft';
     const next = orientation !== 'horizontal' && e.key === 'ArrowDown' ? true : orientation !== 'vertical' && e.key === 'ArrowRight';
@@ -338,16 +344,15 @@ export function arrowNav(container: HTMLElement, selector: string, orientation: 
     const i = active ? items.indexOf(active) : -1;
     if (i < 0) return;
     e.preventDefault();
-    items[(i + (next ? 1 : -1) + items.length) % items.length]!.focus();
+    const target = items[(i + (next ? 1 : -1) + items.length) % items.length]!;
+    target.focus();
+    if (activate && target.getAttribute('aria-disabled') !== 'true') target.click();
   });
 }
 
 const NUM2 = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const NUM1 = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
-/** "2,00" */
+/** French decimal notation: "2,00". */
 export const fmt2 = (v: number): string => NUM2.format(v);
-/** "0,8" */
-export const fmt1 = (v: number): string => NUM1.format(v);
-/** "80 %" (non-breaking space added by frTypo). */
-export const fmtPercent = (v: number): string => `${Math.round(v * 100)} %`;
+/** "80 %" with a non-breaking space. */
+export const fmtPercent = (v: number): string => `${Math.round(v * 100)}\u00a0%`;

@@ -1,22 +1,31 @@
 /**
- * Uniform XZ grid of map boxes (cheap spatial hash) used at load time by the
- * hidden-face test and by the "is there something overhead" lighting query.
+ * Uniform XZ grid of axis-aligned boxes (cheap spatial hash) used at load time by the
+ * hidden-face test, the "is there something overhead" lighting query and the light baker
+ * (map boxes, collision solids…: anything with a `min` / `max` corner pair).
  */
-import type { BoxPrim } from '../../../shared/maps/types';
+import type { Vec3 } from '../../../shared/math/vec3';
+
+/** Anything with an axis-aligned bounding box. */
+export interface Aabb {
+  min: Vec3;
+  max: Vec3;
+}
 
 const EMPTY: readonly number[] = [];
 
-export class BoxGrid {
-  readonly boxes: readonly BoxPrim[];
+export class BoxGrid<T extends Aabb = Aabb> {
+  readonly boxes: readonly T[];
   private readonly cell: number;
   private readonly minX: number;
   private readonly minZ: number;
   private readonly nx: number;
   private readonly nz: number;
   private readonly cells: (number[] | undefined)[];
+  private readonly seen: Int32Array;
+  private stamp = 0;
 
   /** `include` selects which boxes are indexed (e.g. opaque occluders only). */
-  constructor(boxes: readonly BoxPrim[], include: (box: BoxPrim, index: number) => boolean, cell = 4) {
+  constructor(boxes: readonly T[], include: (box: T, index: number) => boolean, cell = 4) {
     this.boxes = boxes;
     let minX = Infinity;
     let minZ = Infinity;
@@ -44,6 +53,7 @@ export class BoxGrid {
     this.nx = Math.max(1, Math.ceil((maxX - minX) / this.cell));
     this.nz = Math.max(1, Math.ceil((maxZ - minZ) / this.cell));
     this.cells = new Array<number[] | undefined>(this.nx * this.nz);
+    this.seen = new Int32Array(boxes.length);
     for (const i of picked) {
       const b = boxes[i]!;
       const x0 = this.clampX(Math.floor((b.min.x - minX) / this.cell));
@@ -65,6 +75,37 @@ export class BoxGrid {
 
   private clampZ(c: number): number {
     return c < 0 ? 0 : c >= this.nz ? this.nz - 1 : c;
+  }
+
+  /**
+   * Collect into `out` (cleared first) the indexed boxes whose cells intersect the XZ
+   * rectangle; each box appears once. Candidates only: callers test the exact overlap.
+   */
+  queryRect(x0: number, z0: number, x1: number, z1: number, out: number[]): number[] {
+    out.length = 0;
+    const cx0 = this.clampX(Math.floor((x0 - this.minX) / this.cell));
+    const cx1 = this.clampX(Math.floor((x1 - this.minX) / this.cell));
+    const cz0 = this.clampZ(Math.floor((z0 - this.minZ) / this.cell));
+    const cz1 = this.clampZ(Math.floor((z1 - this.minZ) / this.cell));
+    if (cx0 === cx1 && cz0 === cz1) {
+      const list = this.cells[cz0 * this.nx + cx0];
+      if (list) for (let i = 0; i < list.length; i++) out.push(list[i]!);
+      return out;
+    }
+    const stamp = ++this.stamp;
+    for (let cz = cz0; cz <= cz1; cz++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const list = this.cells[cz * this.nx + cx];
+        if (!list) continue;
+        for (let i = 0; i < list.length; i++) {
+          const b = list[i]!;
+          if (this.seen[b] === stamp) continue;
+          this.seen[b] = stamp;
+          out.push(b);
+        }
+      }
+    }
+    return out;
   }
 
   /** Indices of the indexed boxes whose footprint touches the cell containing (x, z). */

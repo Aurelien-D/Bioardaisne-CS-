@@ -4,9 +4,14 @@
  * Original artwork for the game (NOT the company's logo): a crosshair ring around
  * a blood drop, "BioArd'Aisne" in bold italics and a custom "STRIKE" lettering
  * whose "I" is a test tube. Pure string builders (no DOM) so the same code also
- * generates public/logo.svg.
+ * generates public/logo.svg:
+ *
+ *   npx tsx -e "import { writeFileSync } from 'node:fs'; import { logoFileMarkup } from './src/client/ui/menu/logo.ts'; writeFileSync('public/logo.svg', logoFileMarkup());"
  */
 
+import { svg } from '../dom';
+
+/** 'full' = emblem + wordmark side by side, 'stacked' = emblem above the wordmark, 'emblem' = crosshair and drop only. */
 export type LogoVariant = 'full' | 'stacked' | 'emblem';
 
 const FONT = "Bahnschrift, 'DIN Alternate', 'Avenir Next Condensed', 'Roboto Condensed', Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
@@ -87,6 +92,15 @@ export function logoMarkup(variant: LogoVariant = 'full', title?: string): strin
     ${emblem(id)}
     <g transform="translate(138 10)">${wordmark(id)}</g>
   </svg>`;
+}
+
+/**
+ * The logo as an inline SVG element: crisp at any size, sized by CSS (set a width,
+ * the height follows the viewBox). Pass `title` when the logo is the accessible name
+ * of something, omit it when it is decorative.
+ */
+export function createLogo(variant: LogoVariant = 'full', className?: string, title?: string): SVGSVGElement {
+  return svg(logoMarkup(variant, title), className);
 }
 
 /**

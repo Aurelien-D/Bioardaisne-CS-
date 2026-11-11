@@ -335,7 +335,9 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     clip: 5,
     reserve: 20,
     reloadTime: 3.4,
-    drawTime: 1.15,
+    // Not shorter than fireInterval: a switch clears the fire cooldown, so a faster
+    // draw would let "shoot, swap, swap" beat the bolt cycle (see weapons/logic.ts).
+    drawTime: 1.45,
     moveSpeed: 0.82,
     spread: 4.5 * D2R,
     spreadCrouchMul: 0.9,

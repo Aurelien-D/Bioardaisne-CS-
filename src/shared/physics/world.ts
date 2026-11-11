@@ -20,6 +20,10 @@
  *  - Results are canonical (independent of the grid traversal order): on equal contact
  *    times the solid with the lowest index wins, and within a solid the Y face is
  *    preferred over X, then Z.
+ *  - Rays follow the same "touching is not hitting" rule, with one exception that keeps
+ *    walls and floors made of several boxes watertight: a ray that travels exactly in the
+ *    plane shared by solids on both of its sides (the seam between two wall boxes or two
+ *    floor tiles, the foot of a wall standing on a floor) is blocked where they meet.
  *  - Queries are not re-entrant (they share scratch fields) but allocate nothing except
  *    the small result object.
  */
@@ -73,6 +77,12 @@ const PARALLEL_EPS = 1e-30;
 const GROUND_TOLERANCE = 0.01;
 /** lineOfSight ignores obstacles within this distance of the end point (target lying on a surface). */
 const LOS_SLACK = 1e-4;
+/**
+ * An axis-parallel ray closer than this (m) to a face plane lies "in" that plane: wide enough
+ * to absorb the last-bit differences between coordinates that are equal on paper but were
+ * computed along different paths (0.1 + 0.2 vs 0.3), far below anything visible.
+ */
+const SEAM_EPS = 1e-9;
 /** Internal flag: malformed solid, never collides. Must not collide with MASK bits. */
 const FLAG_IGNORED = 4;
 
@@ -112,6 +122,16 @@ export class CollisionWorld {
   private rayT = 0;
   private raySolid = -1;
   private rayAxis = 0;
+  /**
+   * Solids whose face plane contains the ray in progress (only possible for a ray exactly
+   * parallel to an axis): entry / exit times, the sectors around the ray they occupy, their
+   * index and entry axis. Grown on demand, reused by every ray.
+   */
+  private readonly grazeT0: number[] = [];
+  private readonly grazeT1: number[] = [];
+  private readonly grazeSectors: number[] = [];
+  private readonly grazeSolid: number[] = [];
+  private readonly grazeAxis: number[] = [];
 
   constructor(solids: readonly Solid[]) {
     this.solids = solids;
@@ -258,7 +278,11 @@ export class CollisionWorld {
    *  - if the box overlaps a solid at the start: `startSolid` and `hit` are true, `fraction` is 0
    *    and `normal` is the shortest way out of the lowest-index overlapped solid;
    *  - a zero `delta` is a pure overlap test (fraction 1 when free);
-   *  - non-finite input yields fraction 0 with `hit` false.
+   *  - non-finite input yields fraction 0 with `hit` false;
+   *  - a box with a zero half extent (a plate, a segment, a point) is accepted, but touching
+   *    still means "not hitting" for it: moving exactly in the plane of a seam it passes
+   *    between the two solids. Use `raycast` / `lineOfSight`, which close seams, for
+   *    anything without thickness.
    */
   sweepBox(center: Vec3, half: Vec3, delta: Vec3, mask: number = MASK.Player): Trace {
     const cx = center.x;
@@ -441,8 +465,11 @@ export class CollisionWorld {
 
   /**
    * Cast a ray (`dir` must be normalised). Returns the nearest hit within `maxDist`, or null.
-   * A ray grazing a face or an edge misses. A ray starting inside a solid hits it at distance 0
-   * (normal = opposite of the dominant ray axis). `maxDist` may be Infinity.
+   * A ray grazing a face or an edge of the solid geometry misses; a ray travelling exactly in
+   * the plane where solids touch each other (a seam inside a wall or a floor, the foot of a
+   * wall) does not slip between them: it hits where there is solid on every side of it.
+   * A ray starting inside a solid hits it at distance 0 (normal = opposite of the dominant ray
+   * axis). `maxDist` may be Infinity.
    */
   raycast(origin: Vec3, dir: Vec3, maxDist: number, mask: number = MASK.Bullet): RayHit | null {
     const ox = origin.x;
@@ -474,8 +501,10 @@ export class CollisionWorld {
   }
 
   /**
-   * True if no solid blocks the segment a -> b. An end point lying exactly on a surface is
-   * visible from the open side of that surface; a start point inside a solid sees nothing.
+   * True if no solid blocks the segment a -> b (same rules as `raycast`). An end point lying
+   * exactly on a surface is visible from the open side of that surface; a start point inside
+   * a solid sees nothing. Two points lying on the same floor see each other along it, but
+   * not through a wall standing on that floor.
    */
   lineOfSight(a: Vec3, b: Vec3, mask: number = MASK.Bullet): boolean {
     const dx = b.x - a.x;
@@ -757,6 +786,15 @@ export class CollisionWorld {
   /**
    * Nearest ray/solid intersection within `maxDist`, walking the grid cell by cell (3D DDA).
    * Fills rayT / raySolid / rayAxis (-1 = origin inside the solid) and returns true on a hit.
+   *
+   * Rays lying in a face plane. Solids are open sets here: a ray that only touches a solid
+   * misses it. Alone, that rule would let a ray exactly parallel to an axis pass between two
+   * boxes that share a face (the seams of a tiled floor or of a wall built from several boxes
+   * sit on the same round coordinates as spawn points and nav nodes). So for such rays the
+   * solids whose face plane contains the ray are remembered together with the side(s) of the
+   * ray they lie on (2 sectors around a ray with one parallel axis, 4 quadrants around a ray
+   * running along an axis), and the ray is stopped at the first point from which every
+   * sector is filled: there it is strictly inside the union of the solids.
    */
   private castRay(
     ox: number,
@@ -784,6 +822,31 @@ export class CollisionWorld {
     const farY = 5 - nearY;
     const nearZ = dz > 0 ? 2 : 5;
     const farZ = 7 - nearZ;
+    // Sector masks (4 bits, one per quadrant around the ray) of a solid lying entirely on the
+    // low / high side of the ray along each parallel axis. The first parallel axis splits the
+    // quadrants one way (0101 / 1010), the second the other way (0011 / 1100); a ray with a
+    // single parallel axis only uses the first split, which still adds up to 1111.
+    let lowY = 15;
+    let highY = 15;
+    let lowX = 15;
+    let highX = 15;
+    let lowZ = 15;
+    let highZ = 15;
+    let split = 0;
+    if (py) {
+      lowY = 5;
+      highY = 10;
+      split++;
+    }
+    if (px) {
+      lowX = split === 0 ? 5 : 3;
+      highX = split === 0 ? 10 : 12;
+      split++;
+    }
+    if (pz) {
+      lowZ = split === 0 ? 5 : 3;
+      highZ = split === 0 ? 10 : 12;
+    }
 
     // Clip the ray to the grid bounds.
     const gx = this.gx;
@@ -852,6 +915,7 @@ export class CollisionWorld {
     let bestT = Infinity;
     let bestSolid = -1;
     let bestAxis = 0;
+    let grazeCount = 0;
 
     for (;;) {
       const c = (iy * nz + iz) * nx + ix;
@@ -864,15 +928,28 @@ export class CollisionWorld {
         let tNear = -Infinity;
         let tFar = Infinity;
         let axis = 1;
+        // Sectors around the ray occupied by this solid: all of them unless the ray lies in
+        // the plane of one of its faces (then only those on the solid's side of that plane).
+        let sectors = 15;
         if (py) {
-          if (oy <= box[o + 1]! || oy >= box[o + 4]!) continue;
+          const lo = box[o + 1]! + SEAM_EPS;
+          const hi = box[o + 4]! - SEAM_EPS;
+          if (oy <= lo || oy >= hi) {
+            if (oy < lo - 2 * SEAM_EPS || oy > hi + 2 * SEAM_EPS) continue;
+            sectors &= oy <= lo ? highY : lowY;
+          }
         } else {
           tNear = (box[o + nearY]! - oy) * idy;
           tFar = (box[o + farY]! - oy) * idy;
           if (tFar <= 0) continue;
         }
         if (px) {
-          if (ox <= box[o]! || ox >= box[o + 3]!) continue;
+          const lo = box[o]! + SEAM_EPS;
+          const hi = box[o + 3]! - SEAM_EPS;
+          if (ox <= lo || ox >= hi) {
+            if (ox < lo - 2 * SEAM_EPS || ox > hi + 2 * SEAM_EPS) continue;
+            sectors &= ox <= lo ? highX : lowX;
+          }
         } else {
           const a = (box[o + nearX]! - ox) * idx;
           const b = (box[o + farX]! - ox) * idx;
@@ -883,7 +960,12 @@ export class CollisionWorld {
           if (b < tFar) tFar = b;
         }
         if (pz) {
-          if (oz <= box[o + 2]! || oz >= box[o + 5]!) continue;
+          const lo = box[o + 2]! + SEAM_EPS;
+          const hi = box[o + 5]! - SEAM_EPS;
+          if (oz <= lo || oz >= hi) {
+            if (oz < lo - 2 * SEAM_EPS || oz > hi + 2 * SEAM_EPS) continue;
+            sectors &= oz <= lo ? highZ : lowZ;
+          }
         } else {
           const a = (box[o + nearZ]! - oz) * idz;
           const b = (box[o + farZ]! - oz) * idz;
@@ -896,11 +978,21 @@ export class CollisionWorld {
         // Miss or graze, or solid entirely behind the origin.
         if (tNear >= tFar || tFar <= 0) continue;
         if (tNear < 0) {
-          // Origin strictly inside the solid.
+          // Origin strictly inside the solid (or, for a grazing solid, alongside it).
           tNear = 0;
           axis = -1;
         }
         if (tNear > tEnd) continue;
+        if (sectors !== 15) {
+          // The ray runs along a face of this solid: not a hit by itself, see below.
+          this.grazeT0[grazeCount] = tNear;
+          this.grazeT1[grazeCount] = tFar;
+          this.grazeSectors[grazeCount] = sectors;
+          this.grazeSolid[grazeCount] = i;
+          this.grazeAxis[grazeCount] = axis;
+          grazeCount++;
+          continue;
+        }
         if (tNear < bestT || (tNear === bestT && i < bestSolid)) {
           bestT = tNear;
           bestSolid = i;
@@ -932,6 +1024,31 @@ export class CollisionWorld {
         iz += stepZ;
         if (iz < 0 || iz >= nz) break;
         tMaxZ += tDeltaZ;
+      }
+    }
+
+    if (grazeCount > 1) {
+      // Earliest point, before any ordinary hit, from which solids fill every sector around
+      // the ray. Full cover can only begin where one of the grazing solids begins; every
+      // solid counted must extend beyond that point (two boxes meeting corner to corner
+      // leave a pinhole). Ties: lowest solid index, like ordinary hits.
+      const t0 = this.grazeT0;
+      const t1 = this.grazeT1;
+      const sectors = this.grazeSectors;
+      const solid = this.grazeSolid;
+      let seam = false;
+      for (let a = 0; a < grazeCount; a++) {
+        const t = t0[a]!;
+        if (t > bestT || (t === bestT && (!seam || solid[a]! > bestSolid))) continue;
+        let cover = 0;
+        for (let b = 0; b < grazeCount; b++) {
+          if (t0[b]! <= t && t < t1[b]!) cover |= sectors[b]!;
+        }
+        if (cover !== 15) continue;
+        bestT = t;
+        bestSolid = solid[a]!;
+        bestAxis = this.grazeAxis[a]!;
+        seam = true;
       }
     }
 

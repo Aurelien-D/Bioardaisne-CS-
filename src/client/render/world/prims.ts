@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { materialInfo } from '../../../shared/maps/materials';
 import type { Prim } from '../../../shared/maps/types';
 import type { GeometryWriter } from './geom';
-import { hexToLinear, type SurfaceShader } from './lighting';
+import { hexToLinear, type SurfaceShader } from './lightmath';
 
 type V3 = readonly [number, number, number];
 

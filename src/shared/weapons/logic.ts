@@ -20,6 +20,29 @@
  *
  * A timer that expires during a tick no longer blocks that tick: the first shot
  * after a draw or a reload leaves on the very tick the animation ends.
+ *
+ * Behaviour worth knowing when reading or tuning:
+ *   - Rate of fire is exact: the part of a tick left over when the cooldown
+ *     expires is carried into the next cooldown (see `cd` in stepWeapons), so
+ *     `fireCd` right after a shot can be slightly below `fireInterval`.
+ *   - Semi-automatic weapons fire on the rising edge of BTN.Fire only: a click
+ *     made during the cooldown is not remembered.
+ *   - Switching weapons clears the fire cooldown: the draw time alone delays the
+ *     first shot of the new weapon. The cooldown of the weapon put away is
+ *     therefore forgotten, so a weapon's `drawTime` must not be shorter than its
+ *     `fireInterval` (minus the two ticks a swap takes), or "shoot, swap, swap,
+ *     shoot" beats its rate of fire. tests/weapons-adversarial.test.ts enforces
+ *     this for every weapon of defs.ts.
+ *   - `ev.zoomChanged` is raised whenever the zoom level changes, including when
+ *     a reload or a weapon switch cancels the zoom.
+ *   - An empty slot in hands behaves like the knife (see activeWeapon).
+ *   - The machine heals itself: a timer, the recoil index, the view punch or the
+ *     inaccuracy found negative, NaN or missing (a snapshot mangled on the wire,
+ *     a field added later) is back in range after one tick, and `ev.fired.dirs`
+ *     are finite unit vectors whatever the state holds. Ray casts never see a
+ *     NaN coming from here.
+ *   - A tick on which no shot leaves allocates nothing (once the JIT has
+ *     compiled the function); a shot allocates its event and one generator.
  */
 import {
   ACTION,
@@ -62,15 +85,21 @@ const TIME_EPSILON = 1e-9;
 const SHOT_SEED_SALT = 0x51a7;
 /** Buttons ignored during freeze time and timed actions (same rule as stepPlayer). */
 const LOCKED_BUTTONS = BTN.Fire | BTN.AltFire | BTN.Reload;
+/**
+ * Widest cone a shot may have (radians). Several times the worst real case
+ * (a sniper fired in mid-air); it only exists so that a corrupt state cannot
+ * push tan() to its pole or send bullets backwards.
+ */
+const MAX_CONE = Math.PI / 3;
+
+/** Clamp a crouch fraction to 0..1; anything that is not a number counts as standing. */
+function crouchFraction(crouch: number): number {
+  return crouch > 0 ? (crouch < 1 ? crouch : 1) : 0;
+}
 
 /** Definition for an inventory entry; an empty or unknown entry behaves like the knife. */
 function defOf(slot: WeaponSlotState | null | undefined): WeaponDef {
   return (slot && WEAPONS[slot.id]) || WEAPONS.knife;
-}
-
-/** Count a timer down by one tick, snapping to exactly 0 when it expires. */
-function countDown(t: number): number {
-  return t > TICK_DT + TIME_EPSILON ? t - TICK_DT : 0;
 }
 
 /** Definition of the weapon currently in hands (falls back to the knife). */
@@ -118,8 +147,7 @@ function spreadOf(s: PlayerState, w: WeaponDef): number {
 
   if (s.onGround) {
     // Crouch bonus, proportional to how far down the player already is.
-    const crouch = s.crouch < 0 ? 0 : s.crouch > 1 ? 1 : s.crouch;
-    spread *= 1 + (w.spreadCrouchMul - 1) * crouch;
+    spread *= 1 + (w.spreadCrouchMul - 1) * crouchFraction(s.crouch);
   } else {
     spread += w.spreadAir;
   }
@@ -179,18 +207,35 @@ export function stepWeapons(s: PlayerState, cmd: UserCmd, ev: StepEvents): void 
   // not needed: a shot fired right now carries it into the next cooldown, so a
   // held trigger fires at exactly 1 / fireInterval on average instead of being
   // rounded up to a whole number of ticks (600 rpm would otherwise become 549).
+  //
+  // All the tests below are written `> 0` / `>= 0` on purpose: a timer that is
+  // negative or not a number fails them, reads as expired and is written back
+  // as a clean value (see "heals itself" in the header).
+  //
+  // The countdowns are written out in place rather than through a helper: a
+  // helper returning a number makes the JIT box it whenever the call is not
+  // inlined, i.e. garbage on every tick of every draw and reload.
   let cd = s.fireCd > 0 ? s.fireCd - TICK_DT : 0;
-  if (s.draw > 0) s.draw = countDown(s.draw);
-  if (s.sinceShot < SINCE_SHOT_CAP) {
-    const t = s.sinceShot + TICK_DT;
-    s.sinceShot = t < SINCE_SHOT_CAP ? t : SINCE_SHOT_CAP;
+  if (s.draw > 0) {
+    const left = s.draw - TICK_DT;
+    if (left > TIME_EPSILON) s.draw = left;
+    else s.draw = 0;
+  } else {
+    s.draw = 0;
   }
+  const since = s.sinceShot + TICK_DT;
+  s.sinceShot = since >= 0 && since < SINCE_SHOT_CAP ? since : SINCE_SHOT_CAP;
   if (s.reload > 0) {
-    s.reload = countDown(s.reload);
-    if (s.reload === 0) {
+    const left = s.reload - TICK_DT;
+    if (left > TIME_EPSILON) {
+      s.reload = left;
+    } else {
+      s.reload = 0;
       fillClip(slot, w);
       ev.reloadFinished = true;
     }
+  } else {
+    s.reload = 0;
   }
 
   // --- 2. Weapon switch --------------------------------------------------------
@@ -242,7 +287,8 @@ export function stepWeapons(s: PlayerState, cmd: UserCmd, ev: StepEvents): void 
   // --- 4. Zoom -----------------------------------------------------------------
   if (w.zoomFov) {
     if ((pressed & BTN.AltFire) !== 0 && s.reload <= 0 && s.draw <= 0) {
-      s.zoom = s.zoom >= w.zoomFov.length ? 0 : s.zoom + 1;
+      // 0 -> 1 -> ... -> last level -> 0. Anything that is not a level counts as unzoomed.
+      s.zoom = s.zoom >= 1 ? (s.zoom >= w.zoomFov.length ? 0 : s.zoom + 1) : 1;
       ev.zoomChanged = true;
     }
   } else if (s.zoom !== 0) {
@@ -287,9 +333,13 @@ export function stepWeapons(s: PlayerState, cmd: UserCmd, ev: StepEvents): void 
     const spread = s.spread * Math.exp(-w.spreadRecovery * TICK_DT);
     s.spread = spread > ANGLE_EPSILON ? spread : 0;
   }
-  if (s.shots > 0 && s.sinceShot > w.shotsResetDelay) {
-    const shots = s.shots - SHOTS_DECAY_RATE * TICK_DT;
-    s.shots = shots > 0 ? shots : 0;
+  if (s.shots > 0) {
+    if (s.sinceShot > w.shotsResetDelay) {
+      const shots = s.shots - SHOTS_DECAY_RATE * TICK_DT;
+      s.shots = shots > 0 ? shots : 0;
+    }
+  } else if (s.shots !== 0) {
+    s.shots = 0; // negative or not a number
   }
 }
 
@@ -309,6 +359,15 @@ function fillClip(slot: WeaponSlotState | null, w: WeaponDef): void {
  * bookkeeping of a shot. Ammo and the fire cooldown are handled by the caller.
  */
 function fireShot(s: PlayerState, cmd: UserCmd, w: WeaponDef, ev: StepEvents): void {
+  // Never shoot from a corrupt state: the directions go straight into ray
+  // casts, where a NaN does far more harm than a bullet without recoil. The
+  // recovery step would fix these fields at the end of the tick anyway; a shot
+  // needs them right now.
+  if (!Number.isFinite(s.punchPitch)) s.punchPitch = 0;
+  if (!Number.isFinite(s.punchYaw)) s.punchYaw = 0;
+  if (!(s.spread >= 0)) s.spread = 0;
+  if (!(s.shots >= 0)) s.shots = 0;
+
   // Bullets go where the camera looks: view angles plus the current view punch.
   // Commands are validated upstream; the fallback is a last line of defence so
   // that a non-finite angle can never turn into NaN rays in the hit detection.
@@ -338,7 +397,8 @@ function fireShot(s: PlayerState, cmd: UserCmd, w: WeaponDef, ev: StepEvents): v
     // A stab goes straight down the view axis; the Room applies the short range.
     dirs.push({ x: fx, y: fy, z: fz });
   } else {
-    const cone = spreadOf(s, w);
+    const raw = spreadOf(s, w);
+    const cone = raw > 0 ? (raw < MAX_CONE ? raw : MAX_CONE) : 0;
     const pellets = w.pellets > 1 ? w.pellets : 1;
     for (let p = 0; p < pellets; p++) {
       // Uniform over the cone's cross-section: radius ~ sqrt(u), angle ~ v.
@@ -356,7 +416,8 @@ function fireShot(s: PlayerState, cmd: UserCmd, w: WeaponDef, ev: StepEvents): v
     }
   }
 
-  const eyeHeight = PLAYER_HEIGHT + (PLAYER_CROUCH_HEIGHT - PLAYER_HEIGHT) * s.crouch - EYE_TOP_OFFSET;
+  // Same formula as eyeHeight() in player/step.ts (not imported: it imports this file).
+  const eyeHeight = PLAYER_HEIGHT + (PLAYER_CROUCH_HEIGHT - PLAYER_HEIGHT) * crouchFraction(s.crouch) - EYE_TOP_OFFSET;
   ev.fired = { weapon: w.id, origin: { x: s.pos.x, y: s.pos.y + eyeHeight, z: s.pos.z }, dirs };
 
   // Recoil. Upward kick: full strength from rest, fading linearly to nothing as

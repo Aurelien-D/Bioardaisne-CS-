@@ -11,55 +11,41 @@
  * covered areas from open sky. It does NOT need the CollisionWorld.
  *
  * All colours are linear RGB; 1.0 means "the texture at its authored brightness".
- * The light-mapping pass replaces `shade()` for box faces (see faces.ts) and can reuse
- * the helpers exported here (hexToLinear, pointFalloff).
+ *
+ * This is now the FALLBACK path only: the engine uses it when the light-map bake
+ * (bake.ts / lightmodel.ts) cannot run. The shared helpers live in lightmath.ts.
  */
 import * as THREE from 'three';
 import { materialInfo } from '../../../shared/maps/materials';
 import type { MapData } from '../../../shared/maps/types';
 import type { Vec3 } from '../../../shared/math/vec3';
 import { BoxGrid } from './boxgrid';
+import { hexToLinear, pointFalloff, type SurfaceShader } from './lightmath';
 
-/** Surface lighting provider used by the geometry emitters (boxes and prims). */
-export interface SurfaceShader {
-  /** Linear RGB light reaching the surface point (x, y, z) with unit normal (nx, ny, nz). */
-  shade(x: number, y: number, z: number, nx: number, ny: number, nz: number, out: Float32Array): void;
-}
-
-const scratchColor = new THREE.Color();
-
-/** 0xRRGGBB (sRGB) -> linear RGB triple. */
-export function hexToLinear(hex: number, out: Float32Array | number[]): void {
-  scratchColor.setHex(hex);
-  out[0] = scratchColor.r;
-  out[1] = scratchColor.g;
-  out[2] = scratchColor.b;
-}
-
-const FALLOFF_K = 0.3;
-
-/**
- * Distance attenuation of a LightDef: 1 at 1 m, smooth window reaching exactly 0 at `range`.
- * `d2` is the squared distance.
- */
-export function pointFalloff(d2: number, range: number): number {
-  const r2 = range * range;
-  if (d2 >= r2) return 0;
-  const w = 1 - d2 / r2;
-  return (w * w * (1 + FALLOFF_K)) / (1 + FALLOFF_K * d2);
-}
+export { hexToLinear, pointFalloff } from './lightmath';
+export type { SurfaceShader } from './lightmath';
 
 /** Overall gains, tuned by eye on the dev maps. */
 const AMBIENT_GAIN = 1.25;
 const SUN_GAIN = 0.95;
-const POINT_GAIN = 1.15;
+const POINT_GAIN = 1.0;
 /** Share of the sky ambient that still reaches covered (indoor) surfaces. */
-const COVERED_SKY = 0.5;
-/** Soft knee: light above this level is compressed so bright spots do not clip flat. */
-const KNEE = 0.95;
+const COVERED_SKY = 0.62;
+/** How much of its colour the sky ambient loses under cover (0 = none, 1 = grey). */
+const INDOOR_DESATURATION = 0.65;
+/** Sunlight bounced off the ground into the lower ambient hemisphere (open air only). */
+const SUN_BOUNCE = 0.2;
+/**
+ * Soft shoulder: light above KNEE is compressed toward PEAK so that bright spots (a white
+ * wall next to a lamp, a sunlit pale floor) keep some shading instead of clipping flat.
+ */
+const KNEE = 0.8;
+const PEAK = 1.16;
+const SHOULDER = 0.45;
 const LIGHT_CELL = 6;
 
-const softClip = (v: number): number => (v <= KNEE ? v : KNEE + (v - KNEE) / (1 + (v - KNEE) * 1.4));
+const softClip = (v: number): number =>
+  v <= KNEE ? v : KNEE + (PEAK - KNEE) * (1 - Math.exp(-(v - KNEE) / SHOULDER));
 
 export class MapLighting implements SurfaceShader {
   /** Direction TO the sun (unit). */
@@ -68,6 +54,10 @@ export class MapLighting implements SurfaceShader {
   readonly sun = new Float32Array(3);
   readonly sky = new Float32Array(3);
   readonly ground = new Float32Array(3);
+  /** Sky ambient under cover (desaturated); ground ambient with the sunlight bounced off the floor. */
+  private readonly skyIndoor = new Float32Array(3);
+  private readonly groundOutdoor = new Float32Array(3);
+  private readonly groundIndoor = new Float32Array(3);
 
   private readonly lightCount: number;
   /** Per light: x, y, z, range, r, g, b (colour × intensity, linear). */
@@ -91,6 +81,12 @@ export class MapLighting implements SurfaceShader {
       this.sun[i]! *= env.sunIntensity * SUN_GAIN;
       this.sky[i]! *= env.ambientIntensity * AMBIENT_GAIN;
       this.ground[i]! *= env.ambientIntensity * AMBIENT_GAIN;
+    }
+    const skyGrey = (this.sky[0]! + this.sky[1]! + this.sky[2]!) / 3;
+    for (let i = 0; i < 3; i++) {
+      this.skyIndoor[i] = this.sky[i]! + (skyGrey - this.sky[i]!) * INDOOR_DESATURATION;
+      this.groundOutdoor[i] = this.ground[i]! + this.sun[i]! * SUN_BOUNCE;
+      this.groundIndoor[i] = this.ground[i]! + this.sun[i]! * SUN_BOUNCE * 0.5;
     }
 
     // --- Point lights in a coarse XZ grid ---
@@ -155,7 +151,8 @@ export class MapLighting implements SurfaceShader {
     const boxes = this.cover.boxes;
     for (let i = 0; i < list.length; i++) {
       const b = boxes[list[i]!]!;
-      if (b.min.y > y - 0.01 && x > b.min.x + 0.01 && x < b.max.x - 0.01 && z > b.min.z + 0.01 && z < b.max.z - 0.01) {
+      // Footprint borders included: a point under the joint of two roof slabs is covered.
+      if (b.min.y > y - 0.01 && x >= b.min.x - 0.01 && x <= b.max.x + 0.01 && z >= b.min.z - 0.01 && z <= b.max.z + 0.01) {
         return true;
       }
     }
@@ -169,13 +166,24 @@ export class MapLighting implements SurfaceShader {
     if (covered && ny > -0.5 && ny < 0.5) covered = this.covered(x + nx * 0.6, y + ny * 0.6, z + nz * 0.6);
 
     // Ambient hemisphere with a fixed per-orientation shade (X walls ≠ Z walls).
+    // Outdoors the lower hemisphere also carries sunlight bounced off the ground;
+    // under cover the sky light is weaker and loses most of its blue cast.
     const h = 0.5 + 0.5 * ny;
-    const skyK = h * (covered ? COVERED_SKY : 1);
     const groundK = 1 - h;
     const shadeK = 1 - 0.16 * nz * nz - 0.05 * (nx < 0 ? nx * nx : 0);
-    let r = (this.sky[0]! * skyK + this.ground[0]! * groundK) * shadeK;
-    let g = (this.sky[1]! * skyK + this.ground[1]! * groundK) * shadeK;
-    let b = (this.sky[2]! * skyK + this.ground[2]! * groundK) * shadeK;
+    let r: number;
+    let g: number;
+    let b: number;
+    if (covered) {
+      const skyK = h * COVERED_SKY;
+      r = (this.skyIndoor[0]! * skyK + this.groundIndoor[0]! * groundK) * shadeK;
+      g = (this.skyIndoor[1]! * skyK + this.groundIndoor[1]! * groundK) * shadeK;
+      b = (this.skyIndoor[2]! * skyK + this.groundIndoor[2]! * groundK) * shadeK;
+    } else {
+      r = (this.sky[0]! * h + this.groundOutdoor[0]! * groundK) * shadeK;
+      g = (this.sky[1]! * h + this.groundOutdoor[1]! * groundK) * shadeK;
+      b = (this.sky[2]! * h + this.groundOutdoor[2]! * groundK) * shadeK;
+    }
 
     if (!covered) {
       const ndl = nx * this.sunDir.x + ny * this.sunDir.y + nz * this.sunDir.z;
@@ -222,10 +230,12 @@ export class MapLighting implements SurfaceShader {
     const y = pos.y + 1;
     const z = pos.z;
     const covered = this.covered(x, y, z);
+    const sky = covered ? this.skyIndoor : this.sky;
+    const ground = covered ? this.groundIndoor : this.groundOutdoor;
     const skyK = 0.7 * (covered ? COVERED_SKY : 1);
-    let r = this.sky[0]! * skyK + this.ground[0]! * 0.3;
-    let g = this.sky[1]! * skyK + this.ground[1]! * 0.3;
-    let b = this.sky[2]! * skyK + this.ground[2]! * 0.3;
+    let r = sky[0]! * skyK + ground[0]! * 0.3;
+    let g = sky[1]! * skyK + ground[1]! * 0.3;
+    let b = sky[2]! * skyK + ground[2]! * 0.3;
     if (!covered) {
       r += this.sun[0]! * 0.6;
       g += this.sun[1]! * 0.6;
@@ -247,9 +257,9 @@ export class MapLighting implements SurfaceShader {
       }
     }
     // Keep dynamic objects readable in the darkest corners and avoid blow-outs.
-    out.r = Math.min(1.35, Math.max(0.2, r));
-    out.g = Math.min(1.35, Math.max(0.2, g));
-    out.b = Math.min(1.35, Math.max(0.2, b));
+    out.r = Math.min(1.35, Math.max(0.3, r));
+    out.g = Math.min(1.35, Math.max(0.3, g));
+    out.b = Math.min(1.35, Math.max(0.3, b));
     return out;
   }
 

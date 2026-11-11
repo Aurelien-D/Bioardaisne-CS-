@@ -233,3 +233,14 @@
     scroll-behavior: auto !important;
   }
 }
+
+/*
+ * Lab motifs, usable as background-image:
+ *   --bas-hex-pattern  hexagonal "molecule" grid (tile 28 × 48.5, size it with background-size)
+ *   --bas-ecg-pattern  ECG trace to repeat along X (tile 240 × 40); --bas-ecg-pattern-hot = brighter stroke
+ */
+:root {
+  --bas-hex-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 48.5'%3E%3Cpath d='M14 0l14 8.08v16.17l-14 8.08-14-8.08V8.08zM14 32.33v16.17' fill='none' stroke='%237cc0f8' stroke-width='.6'/%3E%3C/svg%3E");
+  --bas-ecg-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 40' preserveAspectRatio='none'%3E%3Cpath d='M0 22h86l7-5 6 5h9l5-17 8 31 6-19 4 5h14l8-6 9 6h78' fill='none' stroke='%237cc0f8' stroke-opacity='.55' stroke-width='1.6' stroke-linejoin='round' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
+  --bas-ecg-pattern-hot: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 40' preserveAspectRatio='none'%3E%3Cpath d='M0 22h86l7-5 6 5h9l5-17 8 31 6-19 4 5h14l8-6 9 6h78' fill='none' stroke='%23cfe8ff' stroke-width='2' stroke-linejoin='round' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
+}
