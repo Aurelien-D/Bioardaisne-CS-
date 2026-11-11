@@ -143,6 +143,21 @@ export interface EnvDef {
   fogFar: number;
 }
 
+/**
+ * A real 3D model (glTF) placed in the map, rendered client-side from
+ * /media/models/props/<asset>/model.json. Collision still comes from `solids`.
+ */
+export interface ModelInstance {
+  /** Asset id (see maps/models.ts). */
+  asset: string;
+  /** Position of the model's origin (centre of its footprint, on the floor). */
+  pos: Vec3;
+  /** Rotation around Y in radians. */
+  rotY: number;
+  /** Uniform scale (default 1). */
+  scale?: number;
+}
+
 export interface MapMeta {
   id: string;
   /** Display name, e.g. "Laboratoire de Charleville". */
@@ -162,6 +177,8 @@ export interface MapData {
   solids: Solid[];
   boxes: BoxPrim[];
   prims: Prim[];
+  /** Real 3D models (optional; decoration only). */
+  models?: ModelInstance[];
   lights: LightDef[];
   signs: SignDef[];
   spawns: SpawnDef[];

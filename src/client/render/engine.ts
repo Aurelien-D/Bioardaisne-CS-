@@ -18,6 +18,7 @@ import { createEnvironment, loadHdrSky, type HdrSky } from './env';
 import { preloadPhotoTextures } from './textures/photo';
 import type { MaterialId } from '../../shared/maps/materials';
 import { createPost, type Post } from './post';
+import { buildMapModels, type MapModels } from './world/models';
 import * as THREE from 'three';
 import { DEFAULT_ENV } from '../../shared/maps/builder';
 import type { EnvDef, MapData } from '../../shared/maps/types';
@@ -83,6 +84,7 @@ class Engine implements IEngine {
   private post: Post | null = null;
   private envMap: THREE.Texture | null = null;
   private hdr: HdrSky | null = null;
+  private models: MapModels | null = null;
   private width = 0;
   private height = 0;
   private disposed = false;
@@ -259,6 +261,16 @@ class Engine implements IEngine {
       committed = true;
       this.scene.add(builtWorld.group, builtSigns.group);
       this.applyEnv(map.env);
+      // Real 3D models (furniture, vehicles…), instanced and tinted by the baked light.
+      if (map.models?.length) {
+        const models = await buildMapModels(map, (pos, out) => this.sampleLight(pos, out));
+        if (!wanted()) {
+          models.dispose();
+          return;
+        }
+        this.models = models;
+        this.scene.add(models.group);
+      }
       this.fitShadow(map);
 
       // Compile the shaders and upload the textures now rather than on the first frame.
@@ -278,6 +290,8 @@ class Engine implements IEngine {
   unloadMap(): void {
     this.loadToken++;
     this.world?.dispose();
+    this.models?.dispose();
+    this.models = null;
     this.signs?.dispose();
     this.materials?.dispose();
     this.lightmap?.dispose();

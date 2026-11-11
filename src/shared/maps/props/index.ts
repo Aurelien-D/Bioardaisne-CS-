@@ -12,6 +12,7 @@ import type { MapBuilder } from '../builder';
 import type { PropFamily, PropInfo } from './kit';
 import { LAB_PROPS } from './lab';
 import { LOGISTICS_PROPS } from './logistics';
+import { PROP_MODELS } from './modelmap';
 import { OFFICE_PROPS } from './office';
 import { OPENING_PROPS } from './openings';
 import { RECEPTION_PROPS } from './reception';
@@ -58,6 +59,17 @@ export function placeProp(b: MapBuilder, id: string, x: number, y: number, z: nu
   const info = PROPS[id];
   if (!info) throw new Error(`placeProp(): unknown prop "${id}"`);
   const off = anchor === 'back' ? info.footprint[1] / 2 : 0;
+  const model = PROP_MODELS[id];
+  if (model) {
+    // A real 3D model draws this prop: keep only the colliders of the procedural version.
+    b.at(x, y, z, q, () =>
+      b.at(0, 0, off, 0, () => {
+        b.withoutVisuals(() => info.build(b));
+        b.model(model.asset, 0, model.y ?? 0, 0, model.rot ?? 0, model.scale ?? 1);
+      }),
+    );
+    return info;
+  }
   b.at(x, y, z, q, () => b.at(0, 0, off, 0, () => info.build(b)));
   return info;
 }

@@ -16,6 +16,7 @@ import type {
   FaceName,
   LightDef,
   MapData,
+  ModelInstance,
   MapMeta,
   PointDef,
   Prim,
@@ -76,6 +77,9 @@ export class MapBuilder {
   readonly solids: Solid[] = [];
   readonly boxes: BoxPrim[] = [];
   readonly prims: Prim[] = [];
+  readonly models: ModelInstance[] = [];
+  /** > 0 while inside withoutVisuals(): boxes and prims only produce their colliders. */
+  private hidden = 0;
   readonly lights: LightDef[] = [];
   readonly signs: SignDef[] = [];
   readonly spawns: SpawnDef[] = [];
@@ -184,12 +188,14 @@ export class MapBuilder {
     if (max.x - min.x < 1e-6 || max.y - min.y < 1e-6 || max.z - min.z < 1e-6) {
       throw new Error(`MapBuilder.box(): degenerate box in map ${this.meta.id} (${[x0, y0, z0, x1, y1, z1].join(', ')})`);
     }
-    const b: BoxPrim = { min, max, mat };
-    if (opts.tint !== undefined) b.tint = opts.tint;
-    const faces = this.rotFaces(opts.faces);
-    if (faces) b.faces = faces;
-    if (opts.detail) b.detail = true;
-    this.boxes.push(b);
+    if (this.hidden === 0) {
+      const b: BoxPrim = { min, max, mat };
+      if (opts.tint !== undefined) b.tint = opts.tint;
+      const faces = this.rotFaces(opts.faces);
+      if (faces) b.faces = faces;
+      if (opts.detail) b.detail = true;
+      this.boxes.push(b);
+    }
     if (opts.solid !== false) {
       const s: Solid = { min: { ...min }, max: { ...max }, surf: opts.surf ?? MATERIALS[mat].surf };
       if (opts.noBullets) s.noBullets = true;
@@ -235,10 +241,32 @@ export class MapBuilder {
     if (rot.x !== 0 || rot.y !== 0 || rot.z !== 0) p.rot = rot;
     if (opts.tint !== undefined) p.tint = opts.tint;
     if (opts.seg !== undefined) p.seg = opts.seg;
-    this.prims.push(p);
+    if (this.hidden === 0) this.prims.push(p);
     if (opts.collide) {
       this.collider(cx - sx / 2, cy - sy / 2, cz - sz / 2, cx + sx / 2, cy + sy / 2, cz + sz / 2, MATERIALS[mat].surf);
     }
+    return this;
+  }
+
+  /**
+   * Run `fn` with visuals switched off: boxes and prims still create their colliders
+   * but are not drawn. Used when a real 3D model replaces a procedural prop.
+   */
+  withoutVisuals(fn: () => void): this {
+    this.hidden++;
+    try {
+      fn();
+    } finally {
+      this.hidden--;
+    }
+    return this;
+  }
+
+  /** Place a real 3D model (see maps/models.ts). `rotDeg` turns it around Y (on top of the local frame). */
+  model(asset: string, x: number, y: number, z: number, rotDeg = 0, scale = 1): this {
+    const m: ModelInstance = { asset, pos: this.pt(x, y, z), rotY: (rotDeg * Math.PI) / 180 + (this.cur.q * Math.PI) / 2 };
+    if (scale !== 1) m.scale = scale;
+    this.models.push(m);
     return this;
   }
 
@@ -251,6 +279,7 @@ export class MapBuilder {
 
   /** Text panel. `facing` is in local space (0 = +Z, 1 = +X, 2 = -Z, 3 = -X, 4 = up, 5 = down). */
   sign(def: Omit<SignDef, 'pos'> & { x: number; y: number; z: number }): this {
+    if (this.hidden > 0) return this;
     const { x, y, z, ...rest } = def;
     const facing = rest.facing < 4 ? (rest.facing + this.cur.q) % 4 : rest.facing;
     this.signs.push({ ...rest, facing, pos: this.pt(x, y, z) });
@@ -312,6 +341,7 @@ export class MapBuilder {
       solids: this.solids,
       boxes: this.boxes,
       prims: this.prims,
+      models: this.models,
       lights: this.lights,
       signs: this.signs,
       spawns: this.spawns,
