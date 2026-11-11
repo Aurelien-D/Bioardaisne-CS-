@@ -28,7 +28,7 @@ let loading: Promise<void> | null = null;
 export function preloadSoldier(): Promise<void> {
   if (!loading) {
     loading = new GLTFLoader()
-      .loadAsync(new URL('media/models/soldier.glb', document.baseURI).href)
+      .loadAsync(new URL('media/models/soldier.json', document.baseURI).href)
       .then((gltf) => {
         const scene = gltf.scene;
         scene.updateMatrixWorld(true);
@@ -73,6 +73,7 @@ export class SoldierAvatar implements IAvatar {
   private head: THREE.Object3D | null;
   private mats: THREE.MeshStandardMaterial[] = [];
   private base: THREE.Color[] = [];
+  private glow: THREE.Color[] = [];
   private weaponHolder = new THREE.Group();
   private weapon: WeaponModel | null = null;
   private weaponId: WeaponId | null = null;
@@ -100,6 +101,10 @@ export class SoldierAvatar implements IAvatar {
       const m = (mesh.material as THREE.MeshStandardMaterial).clone();
       m.color.setRGB(m.color.r * tint[0], m.color.g * tint[1], m.color.b * tint[2]);
       m.envMapIntensity = 0.6;
+      // Team colour that stays readable in any lighting: a faint self-lit tint following the texture.
+      m.emissiveMap = m.map;
+      m.emissive.setRGB(tint[0] > 1 ? 0.32 : 0.02, 0.05, tint[2] > 1 ? 0.38 : 0.02);
+      this.glow.push(m.emissive.clone());
       mesh.material = m;
       this.mats.push(m);
       this.base.push(m.color.clone());
@@ -190,7 +195,8 @@ export class SoldierAvatar implements IAvatar {
       const m = this.mats[i]!;
       const s = 0.55 + 0.45 * Math.min(1.2, (l.r + l.g + l.b) / 3);
       m.color.setRGB(b.r * s, b.g * s, b.b * s);
-      m.emissive.setRGB(pulse * 0.15, pulse * 0.4, pulse * 0.8);
+      const g = this.glow[i]!;
+      m.emissive.setRGB(g.r + pulse * 0.15, g.g + pulse * 0.4, g.b + pulse * 0.8);
     }
   }
 
@@ -207,7 +213,7 @@ export class SoldierAvatar implements IAvatar {
     // The pivot is turned to face -Z: positive X rotation there tips the body backwards.
     this.deathDir = impulse.x * fx + impulse.z * fz > 0 ? 1 : -1;
     this.weaponHolder.visible = false;
-    for (const m of this.mats) m.emissive.setRGB(0, 0, 0);
+    for (let i = 0; i < this.mats.length; i++) this.mats[i]!.emissive.copy(this.glow[i]!);
   }
 
   getMuzzle(out: THREE.Vector3): THREE.Vector3 {

@@ -4,7 +4,6 @@
  * pick up believable reflections without any HDR file.
  */
 import * as THREE from 'three';
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { EnvDef } from '../../shared/maps/types';
 
 export function createEnvironment(renderer: THREE.WebGLRenderer, env: EnvDef): THREE.Texture {
@@ -73,41 +72,54 @@ export interface HdrSky {
 
 let hdrPromise: Promise<HdrSky | null> | null = null;
 
-/** Load the HDR sky once. Resolves to null if the file is missing (procedural sky is kept). */
+/** Sun position in media/hdr/sky.jpg (azimuth / elevation, radians), measured when the picture was converted. */
+const SKY_SUN = { az: 0.6596, el: 0.0337 };
+/** The JPG stores sqrt-encoded radiance: value = SKY_PEAK × (byte / 255)². */
+const SKY_PEAK = 6;
+
+/** Load the photographic sky once. Resolves to null if the file is missing (procedural sky is kept). */
 export function loadHdrSky(renderer: THREE.WebGLRenderer): Promise<HdrSky | null> {
   if (!hdrPromise) {
     hdrPromise = (async () => {
       try {
-        const tex = await new RGBELoader().loadAsync(new URL('media/hdr/sky.hdr', document.baseURI).href);
-        tex.mapping = THREE.EquirectangularReflectionMapping;
-        // Brightest texel = the sun.
-        const img = tex.image as { data: Uint16Array | Float32Array; width: number; height: number };
-        const half = tex.type === THREE.HalfFloatType;
-        let best = -1;
-        let bi = 0;
-        const n = img.width * img.height;
-        for (let i = 0; i < n; i += 2) {
-          const r = half ? THREE.DataUtils.fromHalfFloat(img.data[i * 4]!) : img.data[i * 4]!;
-          const g = half ? THREE.DataUtils.fromHalfFloat(img.data[i * 4 + 1]!) : img.data[i * 4 + 1]!;
-          const l = r + g;
-          if (l > best) {
-            best = l;
-            bi = i;
+        const img = await new THREE.ImageLoader().loadAsync(new URL('media/hdr/sky.jpg', document.baseURI).href);
+        const w = img.width;
+        const h = img.height;
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+        ctx.drawImage(img, 0, 0);
+        const src = ctx.getImageData(0, 0, w, h).data;
+        // Decode to half-float radiance; rows are flipped so that v = 1 is the zenith.
+        const lut = new Uint16Array(256);
+        for (let i = 0; i < 256; i++) lut[i] = THREE.DataUtils.toHalfFloat(SKY_PEAK * (i / 255) * (i / 255));
+        const one = THREE.DataUtils.toHalfFloat(1);
+        const data = new Uint16Array(w * h * 4);
+        for (let y = 0; y < h; y++) {
+          const so = (h - 1 - y) * w * 4;
+          const d = y * w * 4;
+          for (let x = 0; x < w * 4; x += 4) {
+            data[d + x] = lut[src[so + x]!]!;
+            data[d + x + 1] = lut[src[so + x + 1]!]!;
+            data[d + x + 2] = lut[src[so + x + 2]!]!;
+            data[d + x + 3] = one;
           }
         }
-        const col = bi % img.width;
-        const row = Math.floor(bi / img.width);
-        const u = (col + 0.5) / img.width;
-        const v = tex.flipY ? 1 - (row + 0.5) / img.height : (row + 0.5) / img.height;
-        const az = (u - 0.5) * Math.PI * 2;
-        const el = (v - 0.5) * Math.PI;
-        const sunDir = new THREE.Vector3(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el));
+        const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.HalfFloatType);
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        tex.colorSpace = THREE.LinearSRGBColorSpace;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.needsUpdate = true;
+        const sunDir = new THREE.Vector3(Math.cos(SKY_SUN.az) * Math.cos(SKY_SUN.el), Math.sin(SKY_SUN.el), Math.sin(SKY_SUN.az) * Math.cos(SKY_SUN.el));
         const pmrem = new THREE.PMREMGenerator(renderer);
         const env = pmrem.fromEquirectangular(tex).texture;
         pmrem.dispose();
         return { background: tex, env, sunDir };
       } catch (err) {
-        console.warn('[env] ciel HDR indisponible, ciel procédural utilisé :', err);
+        console.warn('[env] ciel photographique indisponible, ciel procédural utilisé :', err);
         return null;
       }
     })();

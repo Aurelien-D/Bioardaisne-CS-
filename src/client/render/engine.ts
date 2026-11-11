@@ -313,7 +313,8 @@ class Engine implements IEngine {
       // and use the picture's own sun elevation for the real-time light.
       const theta = Math.atan2(hdr.sunDir.z, hdr.sunDir.x) - Math.atan2(this.sunDir.z, this.sunDir.x);
       const flat = Math.hypot(this.sunDir.x, this.sunDir.z) || 1;
-      const el = Math.max(0.2, Math.asin(Math.min(1, Math.max(-1, hdr.sunDir.y))));
+      // Keep the light high enough for readable shadows even with a sunset picture.
+      const el = Math.max(0.42, Math.asin(Math.min(1, Math.max(-1, hdr.sunDir.y))));
       this.sunDir.set((this.sunDir.x / flat) * Math.cos(el), Math.sin(el), (this.sunDir.z / flat) * Math.cos(el)).normalize();
       this.sun.position.copy(this.sunDir).multiplyScalar(50);
       this.scene.background = hdr.background;
