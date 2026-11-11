@@ -25,7 +25,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await page.getByText('Jouer en solo', { exact: false }).first().click();
     await sleep(400);
     await page.getByText('Lancer la partie', { exact: false }).first().click();
-    await page.waitForFunction(() => window.__bas.state().mode === 'playing', null, { timeout: 120000 });
+    await page.waitForFunction(() => window.__bas.state().mode === 'playing', null, { timeout: 400000 });
     await page.evaluate(() => {
       window.__bas.fakeLock(true);
     });

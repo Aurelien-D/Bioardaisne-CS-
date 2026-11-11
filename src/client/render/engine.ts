@@ -19,6 +19,7 @@ import { preloadPhotoTextures } from './textures/photo';
 import type { MaterialId } from '../../shared/maps/materials';
 import { createPost, softwareRenderer, type Post } from './post';
 import { buildMapModels, type MapModels } from './world/models';
+import { createDust, type Dust } from './world/dust';
 import { FloorReflection } from './world/reflection';
 import * as THREE from 'three';
 import { DEFAULT_ENV } from '../../shared/maps/builder';
@@ -97,6 +98,8 @@ class Engine implements IEngine {
   private readonly canvas: HTMLCanvasElement;
   private readonly settings: SettingsStore;
   private readonly sky: Sky;
+  /** Dust motes in the air around the camera. */
+  private readonly dust: Dust;
   private readonly sun: THREE.DirectionalLight;
   private readonly viewSun: THREE.DirectionalLight;
   private readonly sunDir = new THREE.Vector3(0.45, 0.8, 0.4).normalize();
@@ -191,6 +194,9 @@ class Engine implements IEngine {
 
     this.sky = createSky();
     this.scene.add(this.sky.mesh);
+    this.dust = createDust();
+    this.dust.points.visible = false;
+    this.scene.add(this.dust.points);
     this.applyEnv(DEFAULT_ENV);
 
     this.resizeObserver =
@@ -585,6 +591,11 @@ class Engine implements IEngine {
     const time = (performance.now() - this.startTime) / 1000;
     this.sky.update(time);
     this.materials?.update(time);
+    this.models?.update(time);
+    if (this.dust) {
+      this.dust.points.visible = this.world !== null && this.quality !== 'low';
+      this.dust.update(time, this.camera.position);
+    }
 
     const renderer = this.renderer;
     renderer.info.reset();
@@ -641,6 +652,7 @@ class Engine implements IEngine {
     this.resizeObserver?.disconnect();
     this.sky.dispose();
     this.post?.dispose();
+    this.dust.dispose();
     this.reflection?.dispose();
     this.envMap?.dispose();
     disposeMaterialTextures();

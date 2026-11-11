@@ -121,6 +121,24 @@ const REFLECT_APPLY = /* glsl */ `
 #endif
 `;
 
+/**
+ * Status lights and screens are not frozen: each lamp gets its own rhythm from its position
+ * (breathing green "ready" LEDs, blinking red alarms, flickering blue activity lights, a
+ * faint shimmer on screens).
+ */
+const BLINK: Partial<Record<MaterialId, string>> = {
+  led_green: '0.72 + 0.28 * sin( basTime * 2.1 + basPh * 6.2832 )',
+  led_red: '0.12 + 0.88 * step( 0.5, fract( basTime * 0.85 + basPh ) )',
+  led_blue: '0.3 + 0.7 * step( 0.45, fract( sin( floor( basTime * 9.0 + basPh * 23.0 ) * 12.9898 ) * 43758.5453 ) )',
+  screen_on: '0.95 + 0.05 * sin( basTime * 31.0 + basPh * 6.2832 )',
+};
+const blinkChunk = (expr: string): string => /* glsl */ `#include <emissivemap_fragment>
+	{
+		vec3 basLp = ( vec4( - vViewPosition, 0.0 ) * viewMatrix ).xyz + cameraPosition;
+		float basPh = fract( sin( dot( floor( basLp * 2.5 ), vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 );
+		totalEmissiveRadiance *= ${expr};
+	}`;
+
 const normalCache = new Map<string, THREE.CanvasTexture>();
 
 /** Tangent-space normal map derived from the luminance of an albedo canvas (Sobel filter). */
@@ -244,6 +262,7 @@ export class WorldMaterials {
     const water = info.surf === 'water';
     const time = this.time;
     const reflective = !info.transparent && !info.emissive && (REFLECTIVE_SURF.has(info.surf) || REFLECTIVE_ID.has(id));
+    const blink = this.quality !== 'low' ? BLINK[id] : undefined;
     if (reflective) {
       // Outdoor ground is damp after a shower: smoother than the dry photo, so it mirrors the low sun.
       const outdoor = id === 'asphalt' || id === 'sidewalk' || id === 'paving_stone' || id === 'cobble';
@@ -269,8 +288,14 @@ export class WorldMaterials {
           .replace('#include <common>', '#include <common>\nuniform float basTime;')
           .replace('#include <map_fragment>', WATER_MAP_FRAGMENT);
       }
+      if (blink) {
+        shader.uniforms.basTime = time;
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\nuniform float basTime;')
+          .replace('#include <emissivemap_fragment>', blinkChunk(blink));
+      }
     };
-    m.customProgramCacheKey = () => (water ? 'bas-world-water' : reflective ? (this.reflection ? 'bas-world-refl' : 'bas-world-gloss') : 'bas-world');
+    m.customProgramCacheKey = () => (water ? 'bas-world-water' : blink ? `bas-world-blink-${id}` : reflective ? (this.reflection ? 'bas-world-refl' : 'bas-world-gloss') : 'bas-world');
     if (this.lightMap) {
       m.lightMap = this.lightMap;
       m.lightMapIntensity = this.lightMapIntensity;

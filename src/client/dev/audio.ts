@@ -19,8 +19,18 @@
  *   gallery(names, columns?)   draws several of them in a grid (#gallery) for screenshots
  *   envelope(name, variant?, ms?, count?)  peak per window in dB, for attack / decay checks
  *   masterGain()               gain of the emulated master stage for a quiet signal (≈ 1)
+ *   spray(weapon, shots?, indoor?)  a full-auto burst of the local player as the engine mixes it
+ *       (blast per shot, one reflection layer at a time), through the master stage:
+ *       { peak, rawPeak, rmsDb, clipped (fraction of samples in the clipper's bend), firstDb / lastDb
+ *         (level of the first and last shot windows) }
+ *   stereo(name, azimuthDeg, distance?)  the sound placed around the listener through the HRTF
+ *       panner: { leftDb, rightDb, ild } (ild > 0 = louder in the right ear)
+ *   fingerprint(name, variant?)  what the ear tells sounds apart by: { centroidHz (power-weighted,
+ *       100 Hz – 12 kHz), lowDb (share of the energy under 400 Hz), bands (octaves 63 Hz … 8 kHz, dB
+ *       relative to the total), duration (to -40 dB of the peak) }
+ *   foley()                    every weapon with the foley events it answers to
  */
-import type { FeedbackSound, UiSound } from '../core/contracts';
+import type { FeedbackSound, UiSound, WeaponFoley } from '../core/contracts';
 import { SettingsStore } from '../core/settings';
 import { ANNOUNCE } from '../../shared/identity';
 import type { SurfaceType } from '../../shared/maps/materials';
@@ -29,11 +39,16 @@ import { WEAPONS, type WeaponId } from '../../shared/weapons/defs';
 import {
   AudioEngine,
   CEILING,
+  CUT_FADE,
+  SIDE_PAN,
   allSounds,
   calibrateCompressor,
   createMasterChain,
   createOffline,
+  foleyCatalogue,
   getSound,
+  localShotLevel,
+  localTailLevel,
   renderDef,
   startRendering,
 } from '../audio';
@@ -56,9 +71,41 @@ interface Metrics {
   flags: string[];
 }
 
+interface SprayMetrics {
+  shots: number;
+  interval: number;
+  /** Peak after / before the master stage. */
+  peak: number;
+  rawPeak: number;
+  rmsDb: number;
+  /** Fraction of the output samples inside the bend of the soft clipper (above its knee). */
+  clipped: number;
+  /** Peak level (dB) of the window of the first and of the last shot, after the master stage. */
+  firstDb: number;
+  lastDb: number;
+}
+
+interface StereoMetrics {
+  leftDb: number;
+  rightDb: number;
+  /** Interaural level difference in dB (> 0 = louder in the right ear). */
+  ild: number;
+}
+
+interface Fingerprint {
+  centroidHz: number;
+  lowDb: number;
+  bands: number[];
+  duration: number;
+}
+
 interface AudioHarness {
   ready: Promise<void>;
   engine: AudioEngine;
+  fingerprint(name: string, variant?: number): Promise<Fingerprint>;
+  spray(weapon: WeaponId, shots?: number, indoor?: boolean): Promise<SprayMetrics>;
+  stereo(name: string, azimuthDeg: number, distance?: number): Promise<StereoMetrics>;
+  foley(): { weapon: WeaponId; events: WeaponFoley[] }[];
   names(): string[];
   analyse(opts?: { variants?: boolean; groups?: string[] }): Promise<Record<string, Metrics>>;
   waveform(name: string, variant?: number, canvas?: HTMLCanvasElement): Promise<void>;
@@ -308,6 +355,154 @@ async function masterGain(): Promise<number> {
   let p = 0;
   for (let i = Math.floor(n / 2); i < n; i++) p = Math.max(p, Math.abs(out[0][i]));
   return p / 0.02;
+}
+
+/** Knee of the master clipper (see master.ts): below it the output stage is transparent. */
+const CLIP_KNEE = 0.72;
+
+/**
+ * A full-auto burst of the local player, mixed offline exactly as the engine does it live:
+ * one blast per shot (levels of localShotLevel), one reflection layer at a time (each new
+ * shot fades the previous layer out), everything through the master stage.
+ */
+async function spray(weapon: WeaponId, shots = 12, indoor = true): Promise<SprayMetrics> {
+  const def = WEAPONS[weapon];
+  const interval = def.fireInterval;
+  const dry = await rendered(`shot_${weapon}`);
+  const tails = await rendered(`shot_${weapon}_${indoor ? 'room' : 'open'}`);
+  const makeup = await calibrateCompressor();
+  const lead = PRE_ROLL;
+  const total = lead + shots * interval + tails[0].duration + 0.2;
+  const build = (master: boolean): OfflineAudioContext => {
+    const ctx = createOffline(2, Math.floor(total * SAMPLE_RATE), SAMPLE_RATE);
+    let dest: AudioNode = ctx.destination;
+    if (master) {
+      const chain = createMasterChain(ctx, ctx.destination, makeup);
+      chain.input.gain.value = 1;
+      dest = chain.input;
+    }
+    for (let i = 0; i < shots; i++) {
+      const at = lead + i * interval;
+      const blast = ctx.createBufferSource();
+      blast.buffer = dry[i % dry.length];
+      const g = ctx.createGain();
+      g.gain.value = localShotLevel(i);
+      blast.connect(g);
+      g.connect(dest);
+      blast.start(at);
+      const tail = ctx.createBufferSource();
+      tail.buffer = tails[i % tails.length];
+      const tg = ctx.createGain();
+      tg.gain.value = localTailLevel(i);
+      tail.connect(tg);
+      tg.connect(dest);
+      tail.start(at);
+      if (i < shots - 1) {
+        // The next shot takes over: this layer is faded out and stopped.
+        tg.gain.setTargetAtTime(0, at + interval, CUT_FADE);
+        tail.stop(at + interval + 0.04);
+      }
+    }
+    return ctx;
+  };
+  const [raw, post] = await Promise.all([startRendering(build(false)), startRendering(build(true))]);
+  const chans = (b: AudioBuffer): Float32Array[] => [b.getChannelData(0), b.getChannelData(1)];
+  const out = chans(post);
+  const start = Math.floor(lead * SAMPLE_RATE);
+  const end = Math.floor((lead + shots * interval) * SAMPLE_RATE);
+  let sum = 0;
+  let over = 0;
+  for (const d of out) {
+    for (let i = start; i < end; i++) {
+      sum += d[i] * d[i];
+      if (Math.abs(d[i]) > CLIP_KNEE) over++;
+    }
+  }
+  const windowPeak = (shot: number): number => {
+    const a = Math.floor((lead + shot * interval) * SAMPLE_RATE);
+    const b = Math.min(out[0].length, a + Math.floor(interval * SAMPLE_RATE));
+    let p = 0;
+    for (const d of out) for (let i = a; i < b; i++) p = Math.max(p, Math.abs(d[i]));
+    return 20 * Math.log10(Math.max(1e-9, p));
+  };
+  return {
+    shots,
+    interval,
+    peak: peakOf(out),
+    rawPeak: peakOf(chans(raw)),
+    rmsDb: 10 * Math.log10(Math.max(1e-12, sum / (2 * Math.max(1, end - start)))),
+    clipped: over / (2 * Math.max(1, end - start)),
+    firstDb: windowPeak(0),
+    lastDb: windowPeak(shots - 1),
+  };
+}
+
+const OCTAVES = [63, 125, 250, 500, 1000, 2000, 4000, 8000];
+
+/** Spectral fingerprint of a rendered sound (before the master stage). */
+async function fingerprint(name: string, variant = 0): Promise<Fingerprint> {
+  const buffers = await rendered(name);
+  const buf = buffers[Math.min(variant, buffers.length - 1)];
+  const chans: Float32Array[] = [];
+  for (let c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c));
+  const mono = monoOf(chans);
+  const size = 4096;
+  const frames = spectra(mono, 2048, size, 512);
+  const power = new Float64Array(size / 2);
+  for (const f of frames) for (let i = 0; i < f.length; i++) power[i] += f[i] * f[i];
+  const hzOf = (i: number): number => (i * SAMPLE_RATE) / size;
+  let num = 0;
+  let den = 0;
+  let low = 0;
+  let total = 0;
+  const bands = OCTAVES.map(() => 0);
+  for (let i = 1; i < power.length; i++) {
+    const f = hzOf(i);
+    total += power[i];
+    if (f < 400) low += power[i];
+    if (f >= 100 && f <= 12000) {
+      num += f * power[i];
+      den += power[i];
+    }
+    for (let b = 0; b < OCTAVES.length; b++) if (f >= OCTAVES[b] / Math.SQRT2 && f < OCTAVES[b] * Math.SQRT2) bands[b] += power[i];
+  }
+  const db = (v: number): number => Math.round(100 * Math.log10(Math.max(1e-12, v / Math.max(1e-12, total)))) / 10;
+  const peak = peakOf(chans);
+  let last = mono.length - 1;
+  while (last > 0 && !chans.some((d) => Math.abs(d[last]) > peak * 0.01)) last--;
+  return { centroidHz: den > 0 ? num / den : 0, lowDb: db(low), bands: bands.map(db), duration: (last + 1) / SAMPLE_RATE };
+}
+
+/** A sound placed around the listener (who looks towards -Z) through the same HRTF panner as the engine. */
+async function stereo(name: string, azimuthDeg: number, distance = 10): Promise<StereoMetrics> {
+  const buf = (await rendered(name))[0];
+  const ctx = createOffline(2, buf.length + Math.floor(SAMPLE_RATE * 0.1), SAMPLE_RATE);
+  const panner = ctx.createPanner();
+  panner.panningModel = 'HRTF';
+  panner.distanceModel = 'inverse';
+  panner.rolloffFactor = 0;
+  const a = (azimuthDeg * Math.PI) / 180;
+  panner.positionX.value = Math.sin(a) * distance;
+  panner.positionY.value = 0;
+  panner.positionZ.value = -Math.cos(a) * distance;
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(panner);
+  // Same level panning as the engine's spatial voices, on top of the HRTF.
+  const side = ctx.createStereoPanner();
+  side.pan.value = SIDE_PAN * Math.sin(a);
+  panner.connect(side);
+  side.connect(ctx.destination);
+  src.start(0);
+  const out = await startRendering(ctx);
+  const level = (d: Float32Array): number => {
+    let sum = 0;
+    for (let i = 0; i < d.length; i++) sum += d[i] * d[i];
+    return 10 * Math.log10(Math.max(1e-12, sum / d.length));
+  };
+  const leftDb = level(out.getChannelData(0));
+  const rightDb = level(out.getChannelData(1));
+  return { leftDb, rightDb, ild: rightDb - leftDb };
 }
 
 // =================================================================================
@@ -583,6 +778,67 @@ const FEEDBACK_LABELS: Record<FeedbackSound, string> = {
   defuse_tick: 'Levée (stylo)',
 };
 
+const FOLEY_LABELS: Record<WeaponFoley, string> = {
+  mag_out: 'Chargeur retiré',
+  mag_in: 'Chargeur enclenché',
+  bolt_back: 'Culasse tirée',
+  bolt_forward: 'Culasse relâchée',
+  slide: 'Armement',
+  pump: 'Pompe',
+  shell_in: 'Cartouche',
+  cloth: 'Tissu',
+  draw: 'Prise en main',
+  swish: 'Mouvement vif',
+  click: 'Sélecteur',
+};
+
+/** A reload as the first-person animation would ask for it: [seconds, event]. */
+function foleySequence(weapon: WeaponId): [number, WeaponFoley][] {
+  const def = WEAPONS[weapon];
+  const t = def.reloadTime;
+  switch (def.category) {
+    case 'melee':
+      return [
+        [0, 'draw'],
+        [0.5, 'swish'],
+        [0.85, 'swish'],
+        [1.2, 'click'],
+      ];
+    case 'shotgun':
+      return [
+        [0, 'cloth'],
+        [0.3, 'shell_in'],
+        [0.75, 'shell_in'],
+        [1.2, 'shell_in'],
+        [1.65, 'shell_in'],
+        [2.3, 'pump'],
+      ];
+    case 'sniper':
+      return [
+        [0.25, 'bolt_back'],
+        [0.26 * t, 'mag_out'],
+        [0.4 * t, 'cloth'],
+        [0.53 * t, 'mag_in'],
+        [0.77 * t, 'bolt_forward'],
+      ];
+    case 'pistol':
+      return [
+        [0, 'cloth'],
+        [0.16 * t, 'mag_out'],
+        [0.52 * t, 'mag_in'],
+        [0.8 * t, 'slide'],
+      ];
+    default:
+      return [
+        [0, 'cloth'],
+        [0.18 * t, 'mag_out'],
+        [0.54 * t, 'mag_in'],
+        [0.76 * t, 'bolt_back'],
+        [0.84 * t, 'bolt_forward'],
+      ];
+  }
+}
+
 const UI_LABELS: Record<UiSound, string> = {
   click: 'Clic',
   hover: 'Survol',
@@ -657,11 +913,16 @@ function buildBoard(board: HTMLElement, side: HTMLElement): void {
   spatial.addEventListener('change', () => (source.spatial = spatial.checked));
   const orbit = el('input', { type: 'checkbox' });
   orbit.addEventListener('change', () => (source.orbit = orbit.checked));
+  const indoor = el('input', { type: 'checkbox' });
+  indoor.checked = true;
+  engine.setIndoor(true);
+  indoor.addEventListener('change', () => engine.setIndoor(indoor.checked));
   const checks = el(
     'div',
     { class: 'row' },
     el('label', { class: 'check' }, spatial, 'Son d’un autre joueur (spatialisé)'),
     el('label', { class: 'check' }, orbit, 'Orbite automatique'),
+    el('label', { class: 'check' }, indoor, 'Auditeur en intérieur (réverbération des tirs)'),
   );
   const right = el('div', {}, controls, checks);
   right.append(el('p', { class: 'hint' }, 'Décoché : les sons sont ceux du joueur local (pos = null), pleins et centrés.'));
@@ -732,6 +993,24 @@ function buildBoard(board: HTMLElement, side: HTMLElement): void {
   );
   board.append(weapons);
 
+  // --- Foley ------------------------------------------------------------------------
+  const fol = section('Mécanique des armes', 'un son par pièce et par famille d’arme, demandé par l’animation (IAudio.foley)');
+  for (const { weapon, events } of foleyCatalogue()) {
+    const r = row(WEAPONS[weapon].name);
+    for (const ev of events) r.append(button(FOLEY_LABELS[ev], () => engine.foley(ev, weapon)));
+    r.append(
+      button(
+        'Séquence',
+        () => {
+          for (const [at, ev] of foleySequence(weapon)) setTimeout(() => engine.foley(ev, weapon), at * 1000);
+        },
+        'primary',
+      ),
+    );
+    fol.append(r);
+  }
+  board.append(fol);
+
   // --- Movement ---------------------------------------------------------------------
   const move = section('Déplacements', 'pas par surface (clic), réception (Maj + clic)');
   const steps = el('div', { class: 'row' });
@@ -783,7 +1062,11 @@ function buildBoard(board: HTMLElement, side: HTMLElement): void {
       '',
       button('Touche (corps)', () => engine.bodyHit(worldPos(), false)),
       button('Touche (tête)', () => engine.bodyHit(worldPos(), true)),
-      button('Balle qui siffle', () => engine.whizz({ x: Math.random() - 0.5, y: 1.6, z: -0.6 })),
+      button('Balle qui siffle (3 m)', () => engine.whizz({ x: (Math.random() < 0.5 ? -1 : 1) * 3, y: 1.6, z: -0.6 })),
+      button('Balle qui claque (0,6 m)', () => engine.whizz({ x: (Math.random() < 0.5 ? -1 : 1) * 0.6, y: 1.6, z: -0.2 })),
+      button('Rafale qui passe', () => {
+        for (let i = 0; i < 6; i++) setTimeout(() => engine.whizz({ x: (Math.random() - 0.5) * 4, y: 1.6, z: -0.4 }), i * 95);
+      }),
       button('Salve de plombs', () => {
         for (let i = 0; i < 8; i++) engine.impact('plaster', worldPos());
       }),
@@ -986,7 +1269,7 @@ function updateStatus(): void {
     'Moteur : ',
     b,
     on
-      ? ` · ${d.sampleRate} Hz · voix actives : ${d.voices} / 32 · chaînes : ${d.chains} · catalogue rendu : ${Math.round(d.rendered * 100)} % · voix française : ${d.voice ?? 'voix par défaut du navigateur'}`
+      ? ` · ${d.sampleRate} Hz · voix actives : ${d.voices} / ${d.maxVoices} · ${d.indoor ? 'intérieur' : 'extérieur'} · chaînes : ${d.chains} · catalogue rendu : ${Math.round(d.rendered * 100)} % · voix française : ${d.voice ?? 'voix par défaut du navigateur'}`
       : '',
   );
 }
@@ -1005,6 +1288,10 @@ window.__audio = {
   envelope,
   masterGain,
   makeup: () => calibrateCompressor(),
+  spray,
+  stereo,
+  fingerprint,
+  foley: () => foleyCatalogue(),
 };
 
 function boot(): void {

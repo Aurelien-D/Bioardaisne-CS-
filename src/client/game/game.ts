@@ -53,6 +53,8 @@ interface Remote {
   pitch: number;
   weapon: WeaponId;
   speed: number;
+  velX: number;
+  velZ: number;
   stride: number;
   seen: number;
   corpse: IAvatar | null;
@@ -123,6 +125,11 @@ export class Game {
   private ads = 0;
   private respawnAt = 0;
   private deathPos: Vec3 | null = null;
+  /** Who shot the local player last, and from where (death impulse, death camera). */
+  private lastHurtFrom: Vec3 | null = null;
+  private lastHurtAt = 0;
+  private killerId = -1;
+  private diedAt = 0;
   private selfCorpse: IAvatar | null = null;
   private loadout: Loadout = { ...DEFAULT_LOADOUT };
   private vmWeapon: WeaponId | null = null;
@@ -159,6 +166,9 @@ export class Game {
   private fps = 60;
   private light = new THREE.Color(1, 1, 1);
   private tmpV = new THREE.Vector3();
+  private readonly tmpLook = new THREE.Vector3();
+  private readonly deathLook = new THREE.Vector3();
+  private deathLookInit = false;
   private tmpC = new THREE.Color();
 
   constructor(canvas: HTMLCanvasElement, hudRoot: HTMLElement, menusRoot: HTMLElement) {
@@ -166,6 +176,8 @@ export class Game {
     this.engine = createEngine(canvas, this.settings);
     this.audio = createAudio(this.settings);
     this.viewmodel = createViewModel();
+    // Animation-driven weapon sounds (magazine, bolt, slide…): played when the part actually moves.
+    this.viewmodel.onFoley = (sound, weapon) => this.audio.foley?.(sound, weapon);
     this.engine.viewScene.add(this.viewmodel.root);
     this.viewmodel.setVisible(false);
     this.effects = createEffects(this.engine);
@@ -504,6 +516,8 @@ export class Game {
           pitch: t[5],
           weapon: weaponFromIndex(t[8]),
           speed: 0,
+          velX: 0,
+          velZ: 0,
           stride: 0,
           seen: 0,
           corpse: null,
@@ -532,6 +546,8 @@ export class Game {
     const me = this.me;
     if (!me) return;
     this.deathPos = { ...me.pos };
+    this.diedAt = performance.now();
+    this.deathLookInit = false;
     this.me = null;
     this.viewmodel.setVisible(false);
     this.vmWeapon = null;
@@ -542,13 +558,24 @@ export class Game {
       this.engine.scene.add(a.root);
       const slot = me.slots[me.active];
       a.update({ dt: 0.016, pos: me.pos, yaw: me.yaw, pitch: 0, crouch: me.crouch, speed: 0, onGround: true, weapon: slot ? slot.id : 'knife', reloading: false, carrying: false, protected: false, light: this.light });
-      a.die(forwardFromAngles(me.yaw + Math.PI, 0));
+      // Fall away from the shot that killed (backward when the shooter is unknown: fall, objective…).
+      const from = this.lastHurtFrom && performance.now() - this.lastHurtAt < 1500 ? this.lastHurtFrom : null;
+      a.die(from ? { x: me.pos.x - from.x, y: 0, z: me.pos.z - from.z } : forwardFromAngles(me.yaw + Math.PI, 0));
       this.selfCorpse = a;
     }
   }
 
   private onEvent(e: GameEvent): void {
     const world = this.world!;
+    if (e.e === 'hurt' && e.attacker >= 0) {
+      this.lastHurtFrom = { x: e.from[0], y: e.from[1], z: e.from[2] };
+      this.lastHurtAt = performance.now();
+    } else if (e.e === 'kill' && e.victim === this.myId) {
+      this.killerId = e.killer === this.myId ? -1 : e.killer;
+    } else if (e.e === 'spawn' && e.id === this.myId) {
+      this.killerId = -1;
+      this.lastHurtFrom = null;
+    }
     switch (e.e) {
       case 'shot': {
         const w = weaponFromIndex(e.w);
@@ -584,10 +611,17 @@ export class Game {
         }
         break;
       }
-      case 'hit':
+      case 'hit': {
+        // The victim flinches away from the shooter (this client).
+        const victim = this.remotes.get(e.victim);
+        if (victim?.avatar?.onHit && !e.kill) {
+          const cam = this.engine.camera.position;
+          victim.avatar.onHit({ x: victim.pos.x - cam.x, y: 0, z: victim.pos.z - cam.z });
+        }
         this.hud.hitMarker(e.hg === 1, e.kill);
         this.audio.feedback(e.kill ? 'kill' : e.hg === 1 ? 'headshot' : 'hitmarker');
         break;
+      }
       case 'hurt': {
         const cam = this.engine.camera.position;
         const a = anglesFromDir({ x: e.from[0] - cam.x, y: 0, z: e.from[2] - cam.z });
@@ -713,6 +747,9 @@ export class Game {
           break;
         case 'teamChat':
           this.hud.openChat(true);
+          break;
+        case 'inspect':
+          if (this.me && this.mode === 'playing') this.viewmodel.onInspect?.();
           break;
         case 'loadout':
           if (document.pointerLockElement) document.exitPointerLock();
@@ -866,7 +903,7 @@ export class Game {
       this.viewmodel.setWeapon(wid);
       this.vmWeapon = wid;
       this.viewmodel.onDraw(def.drawTime);
-      this.audio.draw(wid, null);
+      if (!this.viewmodel.foley) this.audio.draw(wid, null);
     }
     if (ev.fired) {
       this.viewmodel.onFire();
@@ -906,7 +943,7 @@ export class Game {
     }
     if (ev.reloadStarted) {
       this.viewmodel.onReload(def.reloadTime);
-      this.audio.reload(wid, def.reloadTime, null);
+      if (!this.viewmodel.foley) this.audio.reload(wid, def.reloadTime, null);
     }
     if (ev.zoomChanged) this.audio.zoom();
     if (ev.jumped) this.audio.jump(null);
@@ -1008,6 +1045,11 @@ export class Game {
       r.weapon = weaponFromIndex(c.w);
       const sp = dt > 0 ? Math.hypot(r.pos.x - px, r.pos.z - pz) / dt : 0;
       r.speed += (Math.min(sp, 9) - r.speed) * Math.min(1, dt * 10);
+      if (dt > 0) {
+        const k = Math.min(1, dt * 10);
+        r.velX += (clamp((r.pos.x - px) / dt, -9, 9) - r.velX) * k;
+        r.velZ += (clamp((r.pos.z - pz) / dt, -9, 9) - r.velZ) * k;
+      }
       const ground = (c.flags & PFLAG.OnGround) !== 0;
       this.engine.sampleLight(r.pos, this.tmpC);
       r.avatar.update({
@@ -1017,6 +1059,8 @@ export class Game {
         pitch: r.pitch,
         crouch: a.crouch + (c.crouch - a.crouch) * Math.min(1, f),
         speed: r.speed,
+        velX: r.velX,
+        velZ: r.velZ,
         onGround: ground,
         weapon: r.weapon,
         reloading: (c.flags & PFLAG.Reloading) !== 0,
@@ -1087,14 +1131,32 @@ export class Game {
         light: this.light,
       });
     } else if (this.deathPos) {
-      // Death camera: pull back and look at the body.
+      // Death camera: pull back from the body; for the first seconds it faces whoever fired the
+      // killing shot (the classic "who got me"), then settles on the body.
       const d = this.deathPos;
-      const back = forwardFromAngles(this.viewYaw + Math.PI, 0);
+      const killer = this.killerId >= 0 ? this.remotes.get(this.killerId) : undefined;
+      const facing = killer && killer.alive && performance.now() - this.diedAt < 3200 ? killer.pos : null;
+      let back = forwardFromAngles(this.viewYaw + Math.PI, 0);
+      if (facing) {
+        const kx = d.x - facing.x;
+        const kz = d.z - facing.z;
+        const kl = Math.hypot(kx, kz);
+        if (kl > 0.5) back = { x: kx / kl, y: 0, z: kz / kl };
+      }
       const want = this.tmpV.set(d.x + back.x * 2.6, d.y + 2.4, d.z + back.z * 2.6);
       const hit = this.world?.raycast({ x: d.x, y: d.y + 1.2, z: d.z }, { x: back.x * 0.73, y: 0.42, z: back.z * 0.73 }, 3.6, MASK.Bullet);
       if (hit) want.set(d.x + back.x * 0.73 * (hit.dist - 0.25), d.y + 1.2 + 0.42 * (hit.dist - 0.25), d.z + back.z * 0.73 * (hit.dist - 0.25));
       cam.position.lerp(want, Math.min(1, dt * 4));
-      cam.lookAt(d.x, d.y + 0.4, d.z);
+      if (facing) {
+        // Look past the body toward the shooter, body kept in the lower part of the frame.
+        const k = Math.min(1, Math.hypot(facing.x - d.x, facing.z - d.z) / 6);
+        this.tmpLook.set(d.x + (facing.x - d.x) * 0.5 * k, d.y + 0.5 + (facing.y + 1.2 - d.y - 0.5) * 0.5 * k, d.z + (facing.z - d.z) * 0.5 * k);
+      } else {
+        this.tmpLook.set(d.x, d.y + 0.4, d.z);
+      }
+      this.deathLook.lerp(this.tmpLook, this.deathLookInit ? Math.min(1, dt * 5) : 1);
+      this.deathLookInit = true;
+      cam.lookAt(this.deathLook);
       this.selfCorpse?.update({ dt, pos: d, yaw: 0, pitch: 0, crouch: 0, speed: 0, onGround: true, weapon: 'knife', reloading: false, carrying: false, protected: false, light: this.light });
     } else if (this.followBot(dt)) {
       // Spectating a player (third-person chase camera).

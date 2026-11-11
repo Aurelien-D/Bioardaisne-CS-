@@ -13,10 +13,14 @@
  * send) for everything that happens in the world. At most MAX_VOICES play at once;
  * when the pool is full the quietest / least important voice is faded out.
  *
+ * The engine knows whether the listener stands indoors or outdoors (setIndoor, or the
+ * ambience as a fallback): the local player's gunshots get the matching reflection
+ * layer and the shared reverb of the world switches between a room and open air.
+ *
  * Every public method is a silent no-op until unlock() has been called from a
  * user gesture, and when Web Audio is not available.
  */
-import type { FeedbackSound, IAudio, UiSound } from '../core/contracts';
+import type { FeedbackSound, IAudio, UiSound, WeaponFoley } from '../core/contracts';
 import type { SettingsStore } from '../core/settings';
 import { ANNOUNCE } from '../../shared/identity';
 import type { SurfaceType } from '../../shared/maps/materials';
@@ -27,6 +31,7 @@ import { Bank, allSounds, getSound, offlineSupported } from './bank';
 import { impulseResponse } from './kit';
 import { calibrateCompressor, createMasterChain, type MasterChain } from './master';
 import './sounds';
+import { foleySound, partName } from './sounds/foley';
 import { SURFACES } from './sounds/steps';
 
 // --- Limits ---------------------------------------------------------------------------
@@ -53,6 +58,10 @@ const MUSIC_LEVEL = 1.5;
 const GROUP_NONE = 0;
 const GROUP_LOCAL_RELOAD = 1;
 const GROUP_AMBIENCE = 2;
+/** Reflections of the local player's last shot: a new shot replaces them. */
+const GROUP_LOCAL_TAIL = 3;
+/** Pump / bolt cycling scheduled by the engine after a local shot (when the view model does not emit it). */
+const GROUP_LOCAL_CYCLE = 4;
 
 // --- Spatial behaviour per kind of sound ---------------------------------------------------
 
@@ -78,10 +87,11 @@ interface Spatial {
 const SP_SHOT: Spatial = { ref: 5, max: 150, roll: 0.6, lpNear: 19000, lpFar: 700, lpDist: 26, send: 0.5, prio: 40, jitter: 0.03 };
 const SP_TAIL: Spatial = { ref: 7, max: 170, roll: 0.45, lpNear: 9000, lpFar: 420, lpDist: 30, send: 0.6, prio: 22, jitter: 0.04 };
 const SP_MECH: Spatial = { ref: 1.5, max: 22, roll: 1, lpNear: 16000, lpFar: 2500, lpDist: 20, send: 0.08, prio: 12, jitter: 0.04 };
-const SP_STEP: Spatial = { ref: 2.2, max: 24, roll: 1, lpNear: 16000, lpFar: 1800, lpDist: 18, send: 0.1, prio: 25, jitter: 0.06 };
+// Footsteps carry: hearing where the others run is half of the game.
+const SP_STEP: Spatial = { ref: 3.2, max: 30, roll: 0.7, lpNear: 16000, lpFar: 1500, lpDist: 20, send: 0.12, prio: 30, jitter: 0.04 };
 const SP_IMPACT: Spatial = { ref: 2.5, max: 50, roll: 0.9, lpNear: 18000, lpFar: 1500, lpDist: 25, send: 0.2, prio: 15, jitter: 0.07 };
 const SP_BODY: Spatial = { ref: 2.5, max: 40, roll: 0.9, lpNear: 18000, lpFar: 1800, lpDist: 25, send: 0.12, prio: 35, jitter: 0.05 };
-const SP_WHIZZ: Spatial = { ref: 1.2, max: 14, roll: 0.5, lpNear: 20000, lpFar: 20000, lpDist: 1, send: 0, prio: 45, jitter: 0.1 };
+const SP_WHIZZ: Spatial = { ref: 0.9, max: 9, roll: 1.1, lpNear: 20000, lpFar: 20000, lpDist: 1, send: 0, prio: 45, jitter: 0.1 };
 const SP_OBJ: Spatial = { ref: 6, max: 140, roll: 0.5, lpNear: 18000, lpFar: 1200, lpDist: 40, send: 0.35, prio: 60, jitter: 0 };
 const SP_BLAST: Spatial = { ref: 25, max: 400, roll: 0.4, lpNear: 18000, lpFar: 900, lpDist: 90, send: 0.4, prio: 90, jitter: 0 };
 
@@ -99,6 +109,8 @@ const table = <K extends string>(keys: readonly K[], prefix: string, suffix = ''
 const SHOT_FULL = table(WEAPON_LIST, 'shot_');
 const SHOT_DRY = table(WEAPON_LIST, 'shot_', '_dry');
 const SHOT_TAIL = table(WEAPON_LIST, 'shot_', '_tail');
+const SHOT_ROOM = table(WEAPON_LIST, 'shot_', '_room');
+const SHOT_OPEN = table(WEAPON_LIST, 'shot_', '_open');
 const STEP_NAME = table(SURFACES, 'step_');
 const LAND_NAME = table(SURFACES, 'land_');
 const IMPACT_NAME = table(SURFACES, 'impact_');
@@ -122,54 +134,53 @@ const FB_NAME = table<FeedbackSound>(
   'fb_',
 );
 
-/** Handling pitch per weapon: heavier guns sound lower. */
-const WEAPON_PITCH: Record<WeaponId, number> = {
-  knife: 1,
-  pistol: 1,
-  deagle: 0.88,
-  smg: 1.12,
-  rifle_ak: 0.93,
-  rifle_m4: 1.03,
-  shotgun: 0.92,
-  sniper: 0.85,
-};
+type ReloadPart = 'cloth' | 'mag_out' | 'mag_in' | 'slide' | 'bolt_back' | 'bolt_forward' | 'pump' | 'shell_in' | 'draw';
+type ReloadStep = readonly [fraction: number, part: ReloadPart, gain: number];
 
-type ReloadStep = readonly [fraction: number, sound: string, gain: number];
-
-/** Reload choreography per weapon category, as fractions of the reload duration. */
+/**
+ * Reload choreography per weapon category, as fractions of the reload duration. Used for the
+ * other players (and for a view model without animation events); the parts are the family
+ * sounds of sounds/foley.ts.
+ */
 const RELOADS: Record<WeaponDef['category'], readonly ReloadStep[]> = {
   melee: [],
   pistol: [
     [0.02, 'cloth', 0.7],
-    [0.16, 'mag_out_light', 1],
+    [0.16, 'mag_out', 1],
     [0.36, 'cloth', 0.5],
-    [0.52, 'mag_in_light', 1],
-    [0.8, 'rack_light', 1],
+    [0.52, 'mag_in', 1],
+    [0.8, 'slide', 1],
   ],
   smg: [
     [0.02, 'cloth', 0.7],
-    [0.18, 'mag_out_heavy', 0.9],
+    [0.18, 'mag_out', 0.9],
     [0.38, 'cloth', 0.5],
-    [0.54, 'mag_in_heavy', 0.95],
-    [0.8, 'rack_heavy', 0.95],
+    [0.54, 'mag_in', 0.95],
+    [0.8, 'slide', 0.95],
   ],
   rifle: [
     [0.02, 'cloth', 0.8],
-    [0.18, 'mag_out_heavy', 1],
+    [0.18, 'mag_out', 1],
     [0.38, 'cloth', 0.6],
-    [0.54, 'mag_in_heavy', 1],
-    [0.8, 'rack_heavy', 1],
+    [0.54, 'mag_in', 1],
+    [0.8, 'slide', 1],
   ],
   // Shell inserts are generated from the duration (see reload()).
   shotgun: [[0.02, 'cloth', 0.8]],
   sniper: [
-    [0.07, 'bolt_open', 1],
-    [0.26, 'mag_out_heavy', 1],
+    [0.07, 'bolt_back', 1],
+    [0.26, 'mag_out', 1],
     [0.4, 'cloth', 0.6],
-    [0.53, 'mag_in_heavy', 1],
-    [0.77, 'bolt_close', 1],
+    [0.53, 'mag_in', 1],
+    [0.77, 'bolt_forward', 1],
   ],
 };
+
+const RELOAD_PARTS: readonly ReloadPart[] = ['cloth', 'mag_out', 'mag_in', 'slide', 'bolt_back', 'bolt_forward', 'pump', 'shell_in', 'draw'];
+/** Sound of each part per weapon ('' = the weapon has no such part). */
+const PART_NAME = Object.fromEntries(
+  WEAPON_LIST.map((w) => [w, Object.fromEntries(RELOAD_PARTS.map((p) => [p, p === 'cloth' ? 'cloth' : partName(w, p)]))]),
+) as Record<WeaponId, Record<ReloadPart, string>>;
 
 /** Jingle that precedes each announcer line, and how long the voice waits for it (ms). */
 const JINGLES: Record<string, readonly [jingle: string, voiceDelay: number, rate: number]> = {
@@ -227,6 +238,32 @@ const AMBIENT_EVENTS: Record<'interior' | 'city', readonly AmbientEvent[]> = {
   ],
 };
 
+// --- Local gunfire ---------------------------------------------------------------------
+
+/**
+ * Level of the local player's shot number `burst` of a spray (0 = first): every shot after the
+ * first sits a little lower, so thirty rounds in three seconds stay punchy without piling up
+ * against the limiter. Shared with the dev bench, which measures a whole spray offline.
+ */
+export function localShotLevel(burst: number): number {
+  return burst <= 0 ? 1 : burst < 3 ? 0.93 : burst < 8 ? 0.87 : 0.82;
+}
+
+/** Level of the reflection layer that follows that shot. */
+export function localTailLevel(burst: number): number {
+  return burst <= 0 ? 1 : 0.85;
+}
+
+/**
+ * Extra level panning of world sounds on top of the HRTF, at 90° to the side. The HRTF alone
+ * places sounds faithfully but shyly (about 3 dB between the ears for a gunshot): in a game the
+ * side a shot or a footstep comes from has to be obvious, on any headphones or speakers.
+ */
+export const SIDE_PAN = 0.5;
+
+/** Time constant (s) of the fade applied to a voice that is cut short (stolen, cancelled, replaced). */
+export const CUT_FADE = 0.006;
+
 // --- Voices ---------------------------------------------------------------------------
 
 const IDLE = 0;
@@ -242,6 +279,10 @@ class Voice {
   deadline = 0;
   startAt = 0;
   bus: AudioNode | null = null;
+  /** World position (spatial voices), to keep the side panning right while the listener turns. */
+  x = 0;
+  y = 0;
+  z = 0;
   readonly onEnded: () => void;
 
   constructor(
@@ -294,7 +335,13 @@ export class AudioEngine implements IAudio {
   private duck!: BiquadFilterNode;
   private duckGain!: GainNode;
   private reverbIn!: GainNode;
+  /** Wet levels of the two shared reverbs (room indoors, open air outdoors). */
+  private wetRoom!: GainNode;
+  private wetOpen!: GainNode;
   private nyquist = 20000;
+  /** Listener under a roof: told by the game (setIndoor), else guessed from the ambience. */
+  private indoor = false;
+  private indoorTold = false;
 
   private readonly spatial: Voice[] = [];
   private readonly flat: Voice[] = [];
@@ -316,6 +363,22 @@ export class AudioEngine implements IAudio {
   private lastHover = -1;
   private lastHit = -1;
   private readonly lastTail: Record<string, number> = {};
+
+  // Local weapon.
+  private lastLocalShot = -10;
+  private lastLocalWeapon: WeaponId | null = null;
+  /** Shots fired in a row without letting go (drives the level of a spray). */
+  private burst = 0;
+  /** A magazine / shell event came since the last local shot: bolt and pump events belong to a reload. */
+  private loadedSinceShot = false;
+  /** Weapons whose view model emits its own pump / bolt sounds after a shot. */
+  private readonly cycleByFoley: Partial<Record<WeaponId, boolean>> = {};
+  private lastFoley: WeaponFoley | null = null;
+  private lastFoleyAt = -1;
+
+  // Feet: left and right alternate (local player, and everybody else as a whole).
+  private localFoot = 1;
+  private worldFoot = 1;
 
   // Loops.
   private ambWanted: 'interior' | 'city' | null = null;
@@ -421,14 +484,20 @@ export class AudioEngine implements IAudio {
     this.sfxBus.connect(this.master.input);
     this.voiceBus.connect(this.master.input);
     this.musicBus.connect(this.master.input);
-    // Shared reverb send for spatialised sounds.
+    // Shared reverb send for spatialised sounds: a room indoors, open air outdoors (cross-faded).
     this.reverbIn = gain(1);
-    const conv = ctx.createConvolver();
-    conv.buffer = impulseResponse(ctx, 'far');
-    const wet = gain(0.8);
-    this.reverbIn.connect(conv);
-    conv.connect(wet);
-    wet.connect(this.worldBus);
+    const reverb = (kind: 'room' | 'far'): GainNode => {
+      const conv = ctx.createConvolver();
+      conv.buffer = impulseResponse(ctx, kind);
+      const wet = gain(0);
+      this.reverbIn.connect(conv);
+      conv.connect(wet);
+      wet.connect(this.worldBus);
+      return wet;
+    };
+    this.wetRoom = reverb('room');
+    this.wetOpen = reverb('far');
+    this.applyEnvironment(true);
 
     this.applyVolumes(true);
     this.pushListener(0, 0, -1);
@@ -468,6 +537,37 @@ export class AudioEngine implements IAudio {
   }
 
   // ===================================================================================
+  // Surroundings
+  // ===================================================================================
+
+  /** The listener stands under a roof (true) or under the open sky (false). */
+  setIndoor(indoor: boolean): void {
+    if (this.indoorTold && indoor === this.indoor) return;
+    this.indoorTold = true;
+    this.indoor = indoor;
+    this.applyEnvironment(false);
+  }
+
+  private applyEnvironment(immediate: boolean): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.wetRoom) return;
+    const room = this.indoor ? 0.75 : 0;
+    const open = this.indoor ? 0.2 : 0.8;
+    try {
+      if (immediate) {
+        this.wetRoom.gain.value = room;
+        this.wetOpen.gain.value = open;
+      } else {
+        this.wetRoom.gain.setTargetAtTime(room, ctx.currentTime, 0.25);
+        this.wetOpen.gain.setTargetAtTime(open, ctx.currentTime, 0.25);
+      }
+    } catch {
+      this.wetRoom.gain.value = room;
+      this.wetOpen.gain.value = open;
+    }
+  }
+
+  // ===================================================================================
   // Listener
   // ===================================================================================
 
@@ -478,6 +578,11 @@ export class AudioEngine implements IAudio {
     this.listenerSet = true;
     if (!this.ctx) return;
     this.pushListener(forward.x, forward.y, forward.z);
+    // Sounds already playing follow the head.
+    for (let i = 0; i < this.spatial.length; i++) {
+      const v = this.spatial[i];
+      if (v.state === PLAYING && v.pan) v.pan.pan.value = this.sideOf(v.x, v.y, v.z);
+    }
   }
 
   private pushListener(fx: number, fy: number, fz: number): void {
@@ -560,7 +665,7 @@ export class AudioEngine implements IAudio {
         v.deadline = now + 0.05;
       } else {
         v.gain.gain.cancelScheduledValues(0);
-        v.gain.gain.setTargetAtTime(0, now, 0.006);
+        v.gain.gain.setTargetAtTime(0, now, CUT_FADE);
         v.src.stop(now + 0.04);
         v.deadline = now + 0.09;
       }
@@ -588,6 +693,12 @@ export class AudioEngine implements IAudio {
       g.connect(panner);
       g.connect(send);
       send.connect(this.reverbIn);
+      // Level panning after the HRTF (see SIDE_PAN).
+      if (typeof ctx.createStereoPanner === 'function') {
+        const side = ctx.createStereoPanner();
+        panner.connect(side);
+        return new Voice(this, lp, g, side, lp, panner, send, side);
+      }
       return new Voice(this, lp, g, panner, lp, panner, send, null);
     }
     if (typeof ctx.createStereoPanner === 'function') {
@@ -736,9 +847,25 @@ export class AudioEngine implements IAudio {
     } else {
       p.setPosition(x, y, z);
     }
+    v.x = x;
+    v.y = y;
+    v.z = z;
+    if (v.pan) {
+      v.pan.pan.cancelScheduledValues(0);
+      v.pan.pan.value = this.sideOf(x, y, z);
+    }
     const r = rate * (1 + (Math.random() * 2 - 1) * sp.jitter);
     this.startVoice(v, buf, this.worldBus, g * (0.92 + Math.random() * 0.16), r, ctx.currentTime + delay, prio, group);
     return v;
+  }
+
+  /** How far to the listener's right (+) or left (-) a point is, as a pan value. */
+  private sideOf(x: number, y: number, z: number): number {
+    const dx = x - this.lx;
+    const dy = y - this.ly;
+    const dz = z - this.lz;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return d > 1e-3 && this.listenerSet ? (SIDE_PAN * (dx * this.rx + dz * this.rz)) / d : 0;
   }
 
   private startVoice(
@@ -805,31 +932,76 @@ export class AudioEngine implements IAudio {
 
   shot(weapon: WeaponId, pos: Vec3 | null): void {
     if (!this.running) return;
+    const now = this.ctx!.currentTime;
     if (pos === null) {
-      this.playFlat(SHOT_FULL[weapon], BUS_WORLD, 1, PRIO_LOCAL_SHOT, 0, 1, 0.025);
-      if (weapon === 'shotgun') this.playFlat('pump', BUS_WORLD, 0.85, PRIO_LOCAL, 0.34, 1, 0.03);
+      const def = WEAPONS[weapon];
+      const held = weapon === this.lastLocalWeapon && now - this.lastLocalShot < Math.max(0.17, (def?.fireInterval ?? 0.1) * 1.7);
+      this.burst = held ? this.burst + 1 : 0;
+      this.lastLocalShot = now;
+      this.lastLocalWeapon = weapon;
+      this.loadedSinceShot = false;
+      this.playFlat(SHOT_FULL[weapon], BUS_WORLD, localShotLevel(this.burst), PRIO_LOCAL_SHOT, 0, 1, 0.025);
+      if (weapon === 'knife') return;
+      // Reflections of the place: one layer at a time, the new shot takes over from the last.
+      this.cancelGroup(GROUP_LOCAL_TAIL);
+      this.playFlat((this.indoor ? SHOT_ROOM : SHOT_OPEN)[weapon], BUS_WORLD, localTailLevel(this.burst), PRIO_LOCAL_SHOT - 8, 0, 1, 0.03, GROUP_LOCAL_TAIL);
+      if (this.cycleByFoley[weapon]) return;
+      const parts = PART_NAME[weapon];
+      if (weapon === 'shotgun') this.playFlat(parts.pump, BUS_WORLD, 0.85, PRIO_LOCAL, 0.34, 1, 0.03, GROUP_LOCAL_CYCLE);
       else if (weapon === 'sniper') {
-        this.playFlat('bolt_open', BUS_WORLD, 0.8, PRIO_LOCAL, 0.48, 1, 0.03);
-        this.playFlat('bolt_close', BUS_WORLD, 0.8, PRIO_LOCAL, 0.88, 1, 0.03);
+        this.playFlat(parts.bolt_back, BUS_WORLD, 0.85, PRIO_LOCAL, 0.48, 1, 0.03, GROUP_LOCAL_CYCLE);
+        this.playFlat(parts.bolt_forward, BUS_WORLD, 0.85, PRIO_LOCAL, 0.88, 1, 0.03, GROUP_LOCAL_CYCLE);
       }
       return;
     }
     const { x, y, z } = pos;
-    this.playAt(SHOT_DRY[weapon], SP_SHOT, x, y, z);
+    const d = this.listenerSet ? Math.hypot(x - this.lx, y - this.ly, z - this.lz) : 0;
+    // Sound travels at 343 m/s: a far shot is seen (tracer, flash) before it is heard.
+    const travel = Math.min(0.3, d / 343);
+    this.playAt(SHOT_DRY[weapon], SP_SHOT, x, y, z, 1, travel);
     if (weapon === 'knife') return;
-    const d = Math.hypot(x - this.lx, y - this.ly, z - this.lz);
     // The tail arrives a little later and takes over as the shot gets farther:
     // close gunfire cracks, far gunfire thumps.
-    const now = this.ctx!.currentTime;
     if (now - (this.lastTail[weapon] ?? -1) > 0.07) {
       this.lastTail[weapon] = now;
-      this.playAt(SHOT_TAIL[weapon], SP_TAIL, x, y, z, 0.8 + Math.min(1.4, d / 30), 0.02 + Math.min(0.14, d / 500));
+      this.playAt(SHOT_TAIL[weapon], SP_TAIL, x, y, z, 0.8 + Math.min(1.4, d / 30), travel + 0.02 + Math.min(0.14, d / 500));
     }
-    if (weapon === 'shotgun') this.playAt('pump', SP_MECH, x, y, z, 0.9, 0.34);
+    const parts = PART_NAME[weapon];
+    if (weapon === 'shotgun') this.playAt(parts.pump, SP_MECH, x, y, z, 0.9, travel + 0.34);
     else if (weapon === 'sniper') {
-      this.playAt('bolt_open', SP_MECH, x, y, z, 0.9, 0.48);
-      this.playAt('bolt_close', SP_MECH, x, y, z, 0.9, 0.88);
+      this.playAt(parts.bolt_back, SP_MECH, x, y, z, 0.9, travel + 0.48);
+      this.playAt(parts.bolt_forward, SP_MECH, x, y, z, 0.9, travel + 0.88);
     }
+  }
+
+  /**
+   * One mechanical sound of the local player's weapon, asked for by the first-person animation
+   * on the frame the part moves. Each weapon family has its own set (sounds/foley.ts).
+   */
+  foley(sound: WeaponFoley, weapon: WeaponId): void {
+    if (!this.running) return;
+    const s = foleySound(weapon, sound);
+    if (!s) return;
+    const now = this.ctx!.currentTime;
+    // The same event from two animation tracks on the same frame plays once.
+    if (sound === this.lastFoley && now - this.lastFoleyAt < 0.03) return;
+    this.lastFoley = sound;
+    this.lastFoleyAt = now;
+    if (sound === 'draw') {
+      // Switching weapons interrupts whatever the hands were doing.
+      this.cancelGroup(GROUP_LOCAL_RELOAD);
+      this.cancelGroup(GROUP_LOCAL_CYCLE);
+    } else if (sound === 'mag_out' || sound === 'mag_in' || sound === 'shell_in') {
+      this.loadedSinceShot = true;
+    } else if ((sound === 'pump' || sound === 'bolt_forward' || sound === 'bolt_back') && (weapon === 'shotgun' || weapon === 'sniper')) {
+      // The view model cycles the action itself after a shot: the engine stops doing it.
+      if (weapon === this.lastLocalWeapon && !this.loadedSinceShot && now - this.lastLocalShot < 1.4 && !this.cycleByFoley[weapon]) {
+        this.cycleByFoley[weapon] = true;
+        this.cancelGroup(GROUP_LOCAL_CYCLE);
+      }
+    }
+    const soft = sound === 'cloth' || sound === 'swish';
+    this.playFlat(s.name, BUS_WORLD, s.gain, soft ? PRIO_LOCAL - 25 : PRIO_LOCAL, 0, 1, 0.035, GROUP_LOCAL_RELOAD, (Math.random() - 0.5) * 0.3);
   }
 
   reload(weapon: WeaponId, duration: number, pos: Vec3 | null): void {
@@ -839,13 +1011,14 @@ export class AudioEngine implements IAudio {
     const local = pos === null;
     if (!local && Math.hypot(pos.x - this.lx, pos.y - this.ly, pos.z - this.lz) > SP_MECH.max) return;
     if (local) this.cancelGroup(GROUP_LOCAL_RELOAD);
-    const pitch = WEAPON_PITCH[weapon];
-    const step = (frac: number, sound: string, gain: number): void => {
-      const r = sound === 'cloth' ? 1 : pitch;
-      if (local) this.playFlat(sound, BUS_WORLD, gain, PRIO_LOCAL, frac * duration, r, 0.03, GROUP_LOCAL_RELOAD, (Math.random() - 0.5) * 0.3);
-      else this.playAt(sound, SP_MECH, pos.x, pos.y, pos.z, gain, frac * duration, r);
+    const parts = PART_NAME[weapon];
+    const step = (frac: number, part: ReloadPart, gain: number): void => {
+      const sound = parts[part];
+      if (!sound) return;
+      if (local) this.playFlat(sound, BUS_WORLD, gain, PRIO_LOCAL, frac * duration, 1, 0.03, GROUP_LOCAL_RELOAD, (Math.random() - 0.5) * 0.3);
+      else this.playAt(sound, SP_MECH, pos.x, pos.y, pos.z, gain, frac * duration);
     };
-    for (const [frac, sound, gain] of RELOADS[def.category]) step(frac, sound, gain);
+    for (const [frac, part, gain] of RELOADS[def.category]) step(frac, part, gain);
     if (def.category === 'shotgun') {
       // One shell roughly every 0.45 s, then the pump.
       const shells = Math.max(2, Math.min(def.clip, Math.round((duration * 0.62) / 0.45)));
@@ -856,16 +1029,15 @@ export class AudioEngine implements IAudio {
 
   draw(weapon: WeaponId, pos: Vec3 | null): void {
     if (!this.running) return;
-    const def = WEAPONS[weapon];
-    if (!def) return;
-    const sound = def.category === 'melee' ? 'handle_knife' : def.category === 'pistol' ? 'handle_light' : 'handle_heavy';
-    const pitch = WEAPON_PITCH[weapon];
+    const sound = PART_NAME[weapon]?.draw;
+    if (!sound) return;
     if (pos === null) {
       // Switching weapons interrupts a reload in progress.
       this.cancelGroup(GROUP_LOCAL_RELOAD);
-      this.playFlat(sound, BUS_WORLD, 1, PRIO_LOCAL, 0, pitch, 0.03);
+      this.cancelGroup(GROUP_LOCAL_CYCLE);
+      this.playFlat(sound, BUS_WORLD, 1, PRIO_LOCAL, 0, 1, 0.03, GROUP_LOCAL_RELOAD);
     } else {
-      this.playAt(sound, SP_MECH, pos.x, pos.y, pos.z, 1, 0, pitch);
+      this.playAt(sound, SP_MECH, pos.x, pos.y, pos.z);
     }
   }
 
@@ -888,26 +1060,38 @@ export class AudioEngine implements IAudio {
     if (!this.running) return;
     const name = STEP_NAME[surf] ?? STEP_NAME.concrete;
     const level = 0.3 + 0.7 * clamp01(loud);
-    // Your own steps sit a little lower in the mix than everybody else's.
-    if (pos === null) this.playFlat(name, BUS_WORLD, level * 0.75, PRIO_LOCAL - 20, 0, 1, 0.06, GROUP_NONE, (Math.random() - 0.5) * 0.24);
-    else this.playAt(name, SP_STEP, pos.x, pos.y, pos.z, level);
+    if (pos === null) {
+      // Left, right, left: the two feet sit on either side and are never quite the same pitch.
+      // Your own steps stay a little under everybody else's.
+      const foot = (this.localFoot = -this.localFoot);
+      this.playFlat(name, BUS_WORLD, level * 0.7, PRIO_LOCAL - 20, 0, 1 + foot * 0.035, 0.04, GROUP_NONE, foot * 0.16);
+    } else {
+      const foot = (this.worldFoot = -this.worldFoot);
+      this.playAt(name, SP_STEP, pos.x, pos.y, pos.z, level * 1.15, 0, 1 + foot * 0.035);
+    }
   }
 
   jump(pos: Vec3 | null): void {
     if (!this.running) return;
     if (pos === null) this.playFlat('jump', BUS_WORLD, 0.9, PRIO_LOCAL - 20, 0, 1, 0.06);
-    else this.playAt('jump', SP_STEP, pos.x, pos.y, pos.z, 0.9);
+    else this.playAt('jump', SP_STEP, pos.x, pos.y, pos.z, 1);
   }
 
   land(surf: SurfaceType, speed: number, pos: Vec3 | null): void {
     if (!this.running) return;
     const name = LAND_NAME[surf] ?? LAND_NAME.concrete;
     const s = Number.isFinite(speed) ? Math.abs(speed) : 4;
-    const level = Math.max(0.3, Math.min(1.2, s / 7));
-    // Hard landings sound heavier.
-    const rate = s > 8 ? 0.9 : 1;
-    if (pos === null) this.playFlat(name, BUS_WORLD, level * 0.85, PRIO_LOCAL - 10, 0, rate, 0.05);
-    else this.playAt(name, SP_STEP, pos.x, pos.y, pos.z, level, 0, rate);
+    // 0 for a step down, 1 for a fall that hurts: louder, lower and with the body's own thud.
+    const k = clamp01((s - 2.5) / 9.5);
+    const level = 0.35 + 0.85 * Math.sqrt(k);
+    const rate = 1.08 - 0.24 * k;
+    if (pos === null) {
+      this.playFlat(name, BUS_WORLD, level * 0.85, PRIO_LOCAL - 10, 0, rate, 0.04);
+      if (k > 0.45) this.playFlat('land_heavy', BUS_WORLD, (k - 0.3) * 1.2, PRIO_LOCAL - 12, 0, 1.1 - 0.2 * k, 0.04);
+    } else {
+      this.playAt(name, SP_STEP, pos.x, pos.y, pos.z, level * 1.1, 0, rate);
+      if (k > 0.45) this.playAt('land_heavy', SP_STEP, pos.x, pos.y, pos.z, (k - 0.3) * 1.3, 0, 1.1 - 0.2 * k);
+    }
   }
 
   // ===================================================================================
@@ -932,12 +1116,16 @@ export class AudioEngine implements IAudio {
     this.playAt(headshot ? 'bodyhit_head' : 'bodyhit', SP_BODY, pos.x, pos.y, pos.z);
   }
 
+  /** `pos` = the point of the bullet's path closest to the listener: the closer, the louder. */
   whizz(pos: Vec3): void {
     if (!this.running) return;
     const now = this.ctx!.currentTime;
-    if (now - this.lastWhizz < 0.05) return;
+    // A burst passing by is a few distinct cracks, not a buzz.
+    if (now - this.lastWhizz < 0.06) return;
     this.lastWhizz = now;
-    this.playAt('whizz', SP_WHIZZ, pos.x, pos.y, pos.z);
+    // Very close: the supersonic crack; a little further: only the hiss of the bullet.
+    const miss = Math.hypot(pos.x - this.lx, pos.y - this.ly, pos.z - this.lz);
+    this.playAt(miss < 1.6 ? 'whizz_crack' : 'whizz', SP_WHIZZ, pos.x, pos.y, pos.z);
   }
 
   // ===================================================================================
@@ -1026,6 +1214,11 @@ export class AudioEngine implements IAudio {
     const next = kind === 'interior' || kind === 'city' ? kind : null;
     if (next === this.ambWanted) return;
     this.ambWanted = next;
+    // Until the game says otherwise, the ambience tells whether the map is an interior.
+    if (!this.indoorTold && next !== null) {
+      this.indoor = next === 'interior';
+      this.applyEnvironment(false);
+    }
     this.syncAmbience();
   }
 
@@ -1169,6 +1362,8 @@ export class AudioEngine implements IAudio {
     this.announcer.cancel();
     this.ambWanted = null;
     this.musicWanted = null;
+    this.indoorTold = false;
+    this.burst = 0;
     if (this.ambTimer !== null) {
       clearInterval(this.ambTimer);
       this.ambTimer = null;
@@ -1208,10 +1403,12 @@ export class AudioEngine implements IAudio {
   }
 
   /** Snapshot of the engine state for the dev sound board. */
-  debug(): { state: string; voices: number; chains: number; rendered: number; voice: string | null; sampleRate: number } {
+  debug(): { state: string; voices: number; maxVoices: number; indoor: boolean; chains: number; rendered: number; voice: string | null; sampleRate: number } {
     return {
       state: this.dead ? 'unavailable' : (this.ctx?.state ?? 'locked'),
       voices: this.active,
+      maxVoices: MAX_VOICES,
+      indoor: this.indoor,
       chains: this.spatial.length + this.flat.length,
       rendered: this.bank ? this.bank.progress() : 0,
       voice: this.announcer.voiceName,

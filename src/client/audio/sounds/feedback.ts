@@ -46,50 +46,61 @@ def(
   3,
 );
 
-// Headshot: a clear little bell.
-def('feedback', 'fb_headshot', 'Tir à la tête', 0.6, 2, 0.4, (k) => {
-  const bus = wetBus(k, 'room', 0.25);
-  k.burst({ type: 'highpass', freq: 3500, attack: 0.0002, decay: 0.005, gain: 0.5, to: bus });
-  bell(k, 0, hz(96), 0.34, 1, bus);
-  chime(k, 0.004, hz(103), 0.2, 0.35, bus);
+// Headshot: the "dink" — a bullet on a thin steel shell. A hard tick, then a handful of
+// inharmonic partials that die within a fifth of a second. Nothing else in the game rings like it.
+def(
+  'feedback',
+  'fb_headshot',
+  'Tir à la tête (« dink »)',
+  0.5,
+  2,
+  0.46,
+  (k) => {
+    const bus = wetBus(k, 'room', 0.12);
+    const base = k.vary(2380, 0.025);
+    k.burst({ type: 'highpass', freq: 4200, attack: 0.0002, decay: 0.004, gain: 0.8, to: bus });
+    k.burst({ type: 'bandpass', freq: base, q: 8, attack: 0.0003, decay: 0.018, gain: 2.4, to: bus });
+    k.partials({
+      base,
+      ratios: [1, 1.34, 1.81, 2.47, 3.32, 4.21],
+      gains: [1, 0.7, 0.5, 0.32, 0.2, 0.1],
+      decay: 0.2,
+      damp: 0.9,
+      attack: 0.0006,
+      gain: 0.8,
+      to: bus,
+    });
+    // The dent: a short, lower knock under the ring.
+    k.tone({ freq: 640, freqEnd: 390, sweep: 0.02, decay: 0.035, gain: 0.35, to: bus });
+  },
+  2,
+);
+
+// Kill: a tight low hit and two rising notes — "sample validated". Lower and rounder than
+// the dink, so a headshot kill (both play) reads as two events.
+def('feedback', 'fb_kill', 'Élimination', 0.6, 2, 0.44, (k) => {
+  const bus = wetBus(k, 'room', 0.18);
+  k.tone({ freq: 170, freqEnd: 62, sweep: 0.05, attack: 0.001, decay: 0.09, gain: 0.9, to: bus });
+  k.burst({ type: 'bandpass', freq: 1300, q: 1.2, attack: 0.0004, decay: 0.014, gain: 1.2, to: bus });
+  pluck(k, 0.004, hz(74), 0.1, 0.8, bus, 1.2, -0.2);
+  pluck(k, 0.078, hz(81), 0.24, 1, bus, 1.4, 0.2);
+  chime(k, 0.078, hz(93), 0.26, 0.22, bus);
 });
 
-// Kill: two rising notes on a soft thump — "sample validated".
-def('feedback', 'fb_kill', 'Élimination', 0.6, 2, 0.42, (k) => {
-  const bus = wetBus(k, 'room', 0.2);
-  k.tone({ freq: 160, freqEnd: 80, sweep: 0.04, decay: 0.07, gain: 0.6, to: bus });
-  pluck(k, 0, hz(81), 0.1, 0.8, bus, 1.2);
-  pluck(k, 0.075, hz(88), 0.22, 1, bus, 1.4);
-  chime(k, 0.075, hz(100), 0.25, 0.25, bus);
-});
-
-// Hurt: grunt-like thud (the engine also muffles the world for a moment).
+// Hurt: a short dull thud in the body, no voice (the engine also muffles the world for a moment).
 def(
   'feedback',
   'fb_hurt',
   'Dégâts reçus',
-  0.45,
+  0.3,
   1,
   0.6,
   (k) => {
-    k.tone({ freq: 120, freqEnd: 55, sweep: 0.06, decay: 0.17, gain: 1 });
-    k.burst({ color: 'pink', type: 'lowpass', freq: 650, attack: 0.001, decay: 0.1, gain: 1.8 });
-    k.burst({ type: 'highpass', freq: 1800, attack: 0.0003, decay: 0.01, gain: 0.3 });
-    // The "ugh": a falling sawtooth through two vowel formants.
-    const f0 = k.vary(138, 0.08);
-    const saw = k.osc('sawtooth', f0, 0.008, 0.26);
-    k.glide(saw.frequency, 0.008, f0, f0 * 0.68, 0.16);
-    const env = k.gain(0);
-    k.perc(env.gain, 0.008, 0.5, 0.014, 0.17);
-    for (const [f, q, g] of [
-      [k.vary(640, 0.06), 5, 1],
-      [k.vary(1150, 0.06), 6, 0.55],
-    ] as const) {
-      const band = k.bp(f, q);
-      const bg = k.gain(g);
-      k.chain(saw, band, bg, env);
-    }
-    env.connect(k.out);
+    k.tone({ freq: k.vary(118, 0.08), freqEnd: 50, sweep: 0.05, attack: 0.0015, decay: 0.12, gain: 1 });
+    k.burst({ color: 'pink', type: 'lowpass', freq: 520, freqEnd: 180, attack: 0.001, decay: 0.075, gain: 1.9 });
+    k.burst({ type: 'bandpass', freq: k.vary(820, 0.1), q: 1.2, attack: 0.0006, decay: 0.022, gain: 0.7 });
+    // Cloth and gear taking the hit: barely there.
+    k.burst({ type: 'bandpass', freq: k.vary(2100, 0.12), q: 1, attack: 0.002, decay: 0.03, gain: 0.12 });
   },
   3,
 );

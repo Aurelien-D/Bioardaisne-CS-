@@ -74,9 +74,22 @@ export interface ViewModelFrame {
   light: THREE.Color;
 }
 
+/**
+ * Mechanical sound of a first-person weapon animation, emitted at the exact moment the part
+ * moves (magazine leaving the well, bolt slamming home…), so sound and motion stay in sync.
+ */
+export type WeaponFoley = 'mag_out' | 'mag_in' | 'bolt_back' | 'bolt_forward' | 'slide' | 'pump' | 'shell_in' | 'cloth' | 'draw' | 'swish' | 'click';
+
 export interface IViewModel {
   /** Add this to engine.viewScene. */
   readonly root: THREE.Object3D;
+  /**
+   * True when this view model emits the reload / draw / inspect sounds itself through `onFoley`:
+   * the game then skips the generic `audio.reload()` and `audio.draw()` for the local player.
+   */
+  readonly foley?: boolean;
+  /** Set by the game: receives the foley events of the animations. */
+  onFoley?: ((sound: WeaponFoley, weapon: WeaponId) => void) | null;
   /** Swap the weapon mesh (null = empty hands). Call onDraw() to play the draw animation. */
   setWeapon(id: WeaponId | null): void;
   onFire(): void;
@@ -87,6 +100,8 @@ export interface IViewModel {
   onDraw(duration: number): void;
   /** Cancel a reload animation (weapon switch). */
   cancelReload(): void;
+  /** Play the weapon inspection animation (the player looks the weapon over). Firing, reloading or switching cancels it. */
+  onInspect?(): void;
   update(frame: ViewModelFrame): void;
   /** Muzzle position in viewCamera space (to start the local player's tracers). */
   getMuzzle(out: THREE.Vector3): THREE.Vector3;
@@ -104,6 +119,9 @@ export interface AvatarFrame {
   crouch: number;
   /** Horizontal speed (m/s). */
   speed: number;
+  /** Horizontal velocity (m/s, world axes): lets the legs strafe or backpedal instead of always running forward. */
+  velX?: number;
+  velZ?: number;
   onGround: boolean;
   weapon: WeaponId;
   reloading: boolean;
@@ -120,6 +138,8 @@ export interface IAvatar {
   update(frame: AvatarFrame): void;
   /** Weapon fire animation (recoil of the arms). */
   onFire(): void;
+  /** A bullet hit this player (it survives): flinch away from `dir`, the direction the bullet travelled. */
+  onHit?(dir: Vec3): void;
   /** Play the death animation; `impulse` = direction of the killing shot. The corpse stays until dispose(). */
   die(impulse: Vec3): void;
   /** World position of the weapon muzzle (to start tracers / muzzle flashes). */
@@ -174,8 +194,15 @@ export interface IAudio {
   /** Re-read volumes from the settings store. */
   applySettings(): void;
   setListener(pos: Vec3, forward: Vec3): void;
+  /**
+   * The listener stands under a roof (true) or under the open sky (false): gunshots get the matching
+   * reflections (close walls / slap-backs off the façades). Without it the ambience decides for the whole map.
+   */
+  setIndoor?(indoor: boolean): void;
   /** Gunshot. `pos` = null for the local player's own weapon (not spatialised, full weight). */
   shot(weapon: WeaponId, pos: Vec3 | null): void;
+  /** One mechanical sound of the local player's weapon, in sync with its animation (see WeaponFoley). */
+  foley?(sound: WeaponFoley, weapon: WeaponId): void;
   /** Full reload sequence (mag out / mag in / bolt) spread over `duration` seconds. */
   reload(weapon: WeaponId, duration: number, pos: Vec3 | null): void;
   draw(weapon: WeaponId, pos: Vec3 | null): void;
@@ -272,6 +299,11 @@ export interface KillFeedEntry {
   headshot: boolean;
   /** The local player is the killer or the victim (highlight). */
   involvesLocal: boolean;
+  /**
+   * Which of the two the local player is. 'killer' also shows the elimination confirmation
+   * under the crosshair. Absent: plain highlight.
+   */
+  localRole?: 'killer' | 'victim';
 }
 
 export interface HudCallbacks {
@@ -292,6 +324,24 @@ export interface IHud {
   hitMarker(headshot: boolean, kill: boolean): void;
   /** Damage direction indicator: angle (radians) of the attacker relative to the view direction (0 = front, + = left). */
   damageFrom(relativeAngle: number, amount: number): void;
+  /**
+   * The local player was eliminated: panel "Éliminé par <nom> — <arme>" (with the killer's remaining
+   * health when known). It leaves by itself when the player is alive again; null removes it at once.
+   */
+  deathInfo?(
+    info: {
+      /** Empty when nobody did (fall, objective). */
+      killer: string;
+      killerTeam: TeamId;
+      /** null = world (fall, objective). */
+      weapon: WeaponId | null;
+      headshot: boolean;
+      /** Health the killer had left (0..100), when known. */
+      killerHealth?: number;
+      /** Distance of the shot (m), when known. */
+      distance?: number;
+    } | null,
+  ): void;
   /** Big centre-screen announcement (round start, win…). */
   announce(title: string, sub?: string, tone?: 'neutral' | 'good' | 'bad'): void;
   /** Small transient info line (e.g. "Vous avez rejoint l'Équipe Labo"). */
