@@ -5,6 +5,7 @@ import { hashStr } from '../util';
 import type { Vec3 } from '../../../shared/math/vec3';
 import { WEAPONS, type WeaponId } from '../../../shared/weapons/defs';
 import type { AvatarFrame, IAvatar } from '../../core/contracts';
+import { getWeaponAsset } from '../weapons/assets';
 import { createWeaponModel, type WeaponModel } from '../weapons/models';
 import { preloadSoldier, SoldierAvatar, soldierReady } from './soldier';
 
@@ -154,7 +155,8 @@ class Avatar implements IAvatar {
   }
 
   private setWeapon(id: WeaponId): void {
-    if (id === this.weaponId) return;
+    // Rebuilt when the weapon changes, or when its real model has arrived since (slow download).
+    if (id === this.weaponId && !(this.weapon && !this.weapon.detailed && getWeaponAsset(id))) return;
     if (this.weapon) {
       this.weaponHolder.remove(this.weapon.root);
       this.weapon.dispose();
@@ -254,6 +256,11 @@ class Avatar implements IAvatar {
 /** Realistic rigged soldier when the model is loaded, procedural silhouette otherwise. */
 export function createAvatar(team: TeamId, name: string): IAvatar {
   return soldierReady() ? new SoldierAvatar(team) : new Avatar(team, name);
+}
+
+/** True for a simple stand-in whose real character model has arrived since (slow download): replace it. */
+export function avatarOutdated(avatar: IAvatar): boolean {
+  return avatar instanceof Avatar && soldierReady();
 }
 
 export { preloadSoldier as preloadAvatarAssets };
