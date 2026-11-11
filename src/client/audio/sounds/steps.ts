@@ -1,6 +1,12 @@
 /**
  * Movement sounds: one footstep recipe per SurfaceType (step_<surface>), the matching
- * two-feet landing (land_<surface>) and the jump effort.
+ * two-feet landing (land_<surface>), the body's own thud on a hard landing (land_heavy)
+ * and the jump effort.
+ *
+ * The surfaces a player crosses most are built to be told apart with eyes closed: lino is
+ * a soft low thud (with the odd squeak), tile a bright double tick, carpet a muffled pat,
+ * concrete — which is also the asphalt and the paving outdoors — a gritty heel click, and
+ * metal (gratings, walkways) a ringing clank with its loose rattle.
  */
 import type { SurfaceType } from '../../../shared/maps/materials';
 import { defineSound } from '../bank';
@@ -60,7 +66,7 @@ const STEPS: Record<SurfaceType, StepSpec> = {
       { type: 'highpass', freq: 3200, decay: 0.012, gain: 0.3 },
       { type: 'bandpass', freq: 2300, q: 1, decay: 0.022, gain: 0.36, at: 0.032 },
     ],
-    grains: { count: [1, 3], span: 0.06, lo: 2500, hi: 5000, q: 3, decay: 0.012, gain: 0.1 },
+    grains: { count: [2, 4], span: 0.07, lo: 2300, hi: 5200, q: 3, decay: 0.012, gain: 0.14 },
   },
   // Bright, short ceramic tick-tock.
   tile: {
@@ -117,7 +123,15 @@ const STEPS: Record<SurfaceType, StepSpec> = {
     layers: [
       { type: 'bandpass', freq: 2600, q: 2, decay: 0.02, gain: 0.8 },
       { type: 'highpass', freq: 5000, decay: 0.006, gain: 0.3 },
+      { type: 'bandpass', freq: 1150, q: 3, decay: 0.05, gain: 0.5 },
     ],
+    // The grating sits loose in its frame: it chatters right after the foot lands.
+    extra: (k, weight) => {
+      const n = 2 + Math.floor(k.rng() * 2 * weight);
+      for (let i = 0; i < n; i++) {
+        k.burst({ at: k.rand(0.012, 0.06 * weight), type: 'bandpass', freq: k.rand(2800, 5600), q: 7, attack: 0.0003, decay: k.rand(0.008, 0.02), gain: k.rand(0.25, 0.6) });
+      }
+    },
   },
   glass: {
     label: 'verre',
@@ -303,6 +317,39 @@ for (const surf of SURFACES) {
     },
   });
 }
+
+// Hard landing: what the body adds to the floor's own sound — a low hit in the legs, the gear
+// rattling on the belt and the breath knocked out. The engine fades it in with the fall speed.
+defineSound({
+  name: 'land_heavy',
+  group: 'step',
+  label: 'Réception lourde (corps)',
+  dur: 0.5,
+  channels: 1,
+  variants: 3,
+  peak: 0.5,
+  build: (k) => {
+    k.tone({ freq: k.vary(94, 0.08), freqEnd: 42, sweep: 0.07, attack: 0.002, decay: 0.17, gain: 1 });
+    k.burst({ color: 'pink', type: 'lowpass', freq: 420, freqEnd: 160, attack: 0.002, decay: 0.12, gain: 2 });
+    k.burst({ type: 'bandpass', freq: k.vary(900, 0.1), q: 0.8, attack: 0.001, decay: 0.03, gain: 0.5 });
+    // Gear.
+    const n = 3 + Math.floor(k.rng() * 3);
+    for (let i = 0; i < n; i++) {
+      k.burst({ at: k.rand(0.015, 0.13), type: 'bandpass', freq: k.rand(1500, 3400), q: 4, attack: 0.0004, decay: k.rand(0.008, 0.018), gain: k.rand(0.15, 0.4) });
+    }
+    // Breath.
+    for (const [f, g] of [
+      [k.vary(850, 0.08), 0.2],
+      [k.vary(1750, 0.08), 0.09],
+    ] as const) {
+      const src = k.noise('white', 0.03, 0.2);
+      const band = k.bp(f, 3);
+      const env = k.gain(0);
+      k.swell(env.gain, 0.03, g, 0.03, 0.01, 0.12);
+      k.chain(src, band, env, k.out);
+    }
+  },
+});
 
 // Jump: push-off scuff, cloth, a short breath.
 defineSound({

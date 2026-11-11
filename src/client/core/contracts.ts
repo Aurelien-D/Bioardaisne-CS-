@@ -194,6 +194,11 @@ export interface IAudio {
   /** Re-read volumes from the settings store. */
   applySettings(): void;
   setListener(pos: Vec3, forward: Vec3): void;
+  /**
+   * The listener stands under a roof (true) or under the open sky (false): gunshots get the matching
+   * reflections (close walls / slap-backs off the façades). Without it the ambience decides for the whole map.
+   */
+  setIndoor?(indoor: boolean): void;
   /** Gunshot. `pos` = null for the local player's own weapon (not spatialised, full weight). */
   shot(weapon: WeaponId, pos: Vec3 | null): void;
   /** One mechanical sound of the local player's weapon, in sync with its animation (see WeaponFoley). */
@@ -294,6 +299,11 @@ export interface KillFeedEntry {
   headshot: boolean;
   /** The local player is the killer or the victim (highlight). */
   involvesLocal: boolean;
+  /**
+   * Which of the two the local player is. 'killer' also shows the elimination confirmation
+   * under the crosshair. Absent: plain highlight.
+   */
+  localRole?: 'killer' | 'victim';
 }
 
 export interface HudCallbacks {
@@ -314,6 +324,24 @@ export interface IHud {
   hitMarker(headshot: boolean, kill: boolean): void;
   /** Damage direction indicator: angle (radians) of the attacker relative to the view direction (0 = front, + = left). */
   damageFrom(relativeAngle: number, amount: number): void;
+  /**
+   * The local player was eliminated: panel "Éliminé par <nom> — <arme>" (with the killer's remaining
+   * health when known). It leaves by itself when the player is alive again; null removes it at once.
+   */
+  deathInfo?(
+    info: {
+      /** Empty when nobody did (fall, objective). */
+      killer: string;
+      killerTeam: TeamId;
+      /** null = world (fall, objective). */
+      weapon: WeaponId | null;
+      headshot: boolean;
+      /** Health the killer had left (0..100), when known. */
+      killerHealth?: number;
+      /** Distance of the shot (m), when known. */
+      distance?: number;
+    } | null,
+  ): void;
   /** Big centre-screen announcement (round start, win…). */
   announce(title: string, sub?: string, tone?: 'neutral' | 'good' | 'bad'): void;
   /** Small transient info line (e.g. "Vous avez rejoint l'Équipe Labo"). */

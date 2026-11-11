@@ -17,6 +17,7 @@ export function createAudio(settings: SettingsStore): IAudio {
   return new AudioEngine(settings);
 }
 
-export { AudioEngine } from './engine';
+export { AudioEngine, CUT_FADE, SIDE_PAN, localShotLevel, localTailLevel } from './engine';
+export { foleyCatalogue, foleySound } from './sounds/foley';
 export { allSounds, getSound, renderDef, createOffline, startRendering, type SoundDef, type SoundGroup } from './bank';
 export { createMasterChain, calibrateCompressor, CEILING } from './master';

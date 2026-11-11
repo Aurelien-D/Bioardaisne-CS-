@@ -12,7 +12,7 @@
 import { mulberry32, type Rng } from '../../shared/math/rng';
 
 export type NoiseColor = 'white' | 'pink' | 'brown';
-export type ReverbKind = 'room' | 'hall' | 'far';
+export type ReverbKind = 'room' | 'hall' | 'far' | 'corridor' | 'street';
 
 const NOISE_SECONDS = 3;
 const noiseCache = new Map<string, AudioBuffer>();
@@ -90,24 +90,32 @@ export function noiseBuffer(ctx: BaseAudioContext, color: NoiseColor): AudioBuff
 }
 
 /**
+ * t60: decay time; pre: pre-delay; damp: how fast the highs die; early: number of discrete early
+ * reflections, spread over `spread` × 48 ms; bright: high-frequency content of the tail.
+ */
+const IR_SPECS: Record<ReverbKind, { t60: number; pre: number; damp: number; early: number; bright: number; spread: number; seed: number }> = {
+  room: { t60: 0.55, pre: 0.004, damp: 0.5, early: 5, bright: 0.7, spread: 0.6, seed: 11 },
+  hall: { t60: 1.7, pre: 0.012, damp: 0.6, early: 7, bright: 0.55, spread: 1, seed: 23 },
+  far: { t60: 1.25, pre: 0.02, damp: 0.8, early: 6, bright: 0.35, spread: 1, seed: 37 },
+  corridor: { t60: 0.42, pre: 0.003, damp: 0.45, early: 9, bright: 0.62, spread: 0.75, seed: 53 },
+  street: { t60: 1.9, pre: 0.03, damp: 0.9, early: 5, bright: 0.3, spread: 2.6, seed: 71 },
+};
+
+/**
  * Generated stereo impulse response: a few early reflections followed by a diffuse
  * tail whose high frequencies die faster than the lows.
  *  room: small tiled lab room   hall: jingles and fanfares   far: shared send for distant world sounds
+ *  corridor: hard, close walls (gunfire indoors)   street: open air between façades (gunfire outdoors)
  */
 export function impulseResponse(ctx: BaseAudioContext, kind: ReverbKind): AudioBuffer {
   const sr = ctx.sampleRate;
   const key = `${kind}@${sr}`;
   const cached = irCache.get(key);
   if (cached) return cached;
-  const spec =
-    kind === 'room'
-      ? { t60: 0.55, pre: 0.004, damp: 0.5, early: 5, bright: 0.7 }
-      : kind === 'hall'
-        ? { t60: 1.7, pre: 0.012, damp: 0.6, early: 7, bright: 0.55 }
-        : { t60: 1.25, pre: 0.02, damp: 0.8, early: 6, bright: 0.35 };
+  const spec = IR_SPECS[kind];
   const n = Math.floor(sr * (spec.t60 * 1.15 + spec.pre));
   const buf = makeBuffer(ctx, 2, n, sr);
-  const rnd = mulberry32(kind === 'room' ? 11 : kind === 'hall' ? 23 : 37);
+  const rnd = mulberry32(spec.seed);
   const preN = Math.floor(spec.pre * sr);
   for (let ch = 0; ch < 2; ch++) {
     const d = buf.getChannelData(ch);
@@ -125,7 +133,7 @@ export function impulseResponse(ctx: BaseAudioContext, kind: ReverbKind): AudioB
     }
     // Early reflections.
     for (let e = 0; e < spec.early; e++) {
-      const t = spec.pre + (0.003 + rnd() * 0.045) * (kind === 'room' ? 0.6 : 1);
+      const t = spec.pre + (0.003 + rnd() * 0.045) * spec.spread;
       const i = Math.floor(t * sr);
       const g = (0.5 + rnd() * 0.4) * (e % 2 === ch ? 1 : 0.55) * (rnd() < 0.5 ? -1 : 1);
       if (i < n) d[i] += g * 0.35;

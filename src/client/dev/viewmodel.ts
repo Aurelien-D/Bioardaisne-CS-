@@ -27,7 +27,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { WEAPONS, type WeaponId } from '../../shared/weapons/defs';
-import type { IEngine } from '../core/contracts';
+import type { IEngine, ViewModelFrame } from '../core/contracts';
 import { preloadAvatarAssets } from '../render/avatar';
 import { createEffects } from '../render/effects';
 import { createPost } from '../render/post';
@@ -186,22 +186,43 @@ void (async () => {
   const DT = 1 / 60;
   let time = 0;
   let zoom = q.has('zoomt') ? 0 : num('zoom', q.has('unzoomt') ? 1 : 0);
+  // Inputs that the automation can change while the page runs (window.__vm.set).
+  const live: Record<string, number> = {
+    speed: num('speed', 0),
+    air: q.get('air') === '1' ? 1 : 0,
+    crouch: num('crouch', 0),
+    ads: adsBlend,
+    strafe: num('strafe', 0),
+    ammo: q.get('empty') === '1' ? 0 : -1,
+  };
+  const frame: ViewModelFrame & { moveRight?: number; ammo?: number } = {
+    dt: 0,
+    speed: 0,
+    onGround: true,
+    crouch: 0,
+    lookDeltaYaw: 0,
+    lookDeltaPitch: 0,
+    punchPitch: 0,
+    punchYaw: 0,
+    zoom: 0,
+    ads: 0,
+    team: num('team', 0),
+    light,
+  };
   const step = (dt: number): void => {
     time += dt;
-    vm.update({
-      dt,
-      speed: num('speed', 0),
-      onGround: q.get('air') !== '1',
-      crouch: num('crouch', 0),
-      lookDeltaYaw: (sway[0] ?? 0) * dt,
-      lookDeltaPitch: (sway[1] ?? 0) * dt,
-      punchPitch: 0,
-      punchYaw: 0,
-      zoom,
-      ads: adsBlend,
-      team: num('team', 0),
-      light,
-    });
+    frame.dt = dt;
+    frame.speed = Math.max(live.speed!, Math.abs(live.strafe!));
+    frame.onGround = live.air! < 0.5;
+    frame.crouch = live.crouch!;
+    frame.lookDeltaYaw = (sway[0] ?? 0) * dt;
+    frame.lookDeltaPitch = (sway[1] ?? 0) * dt;
+    frame.zoom = zoom;
+    frame.ads = live.ads!;
+    frame.moveRight = live.strafe!;
+    if (live.ammo! >= 0) frame.ammo = live.ammo!;
+    else delete frame.ammo;
+    vm.update(frame);
   };
   const run = (seconds: number): void => {
     for (let t = 0; t < seconds - 1e-6; t += DT) step(Math.min(DT, seconds - t));
@@ -248,10 +269,43 @@ void (async () => {
     frozen = true;
   }
 
+  // Automation (contact sheets of a whole sequence from one page load): with hold=1 the picture
+  // is frozen and window.__vm drives the view model; advance(s) plays s seconds.
+  if (q.get('hold') === '1') frozen = true;
+  let waiters: (() => void)[] = [];
+  (window as unknown as { __vm: unknown }).__vm = {
+    fire: () => vm.onFire(),
+    dry: () => vm.onDryFire(),
+    reload: () => vm.onReload(def.reloadTime || 2),
+    cancelReload: () => vm.cancelReload(),
+    inspect: () => vm.onInspect?.(),
+    draw: (dur?: number) => vm.onDraw(dur ?? (def.drawTime || 0.5)),
+    weapon: (w: string) => vm.setWeapon(w as WeaponId),
+    set: (k: string, v: number) => {
+      live[k] = v;
+    },
+    advance: (seconds: number) => run(seconds),
+    /** Resolves once the current state has been drawn. */
+    rendered: () =>
+      new Promise<void>((resolve) => {
+        let left = 2;
+        const tick = (): void => {
+          if (--left <= 0) resolve();
+          else waiters.push(tick);
+        };
+        waiters.push(tick);
+      }),
+  };
+
   const auto = q.get('auto');
   let next = 0;
   let n = 0;
   const loop = (): void => {
+    if (waiters.length) {
+      const w = waiters;
+      waiters = [];
+      for (const fn of w) fn();
+    }
     if (auto && time >= next) {
       if (auto === 'fire') {
         vm.onFire();

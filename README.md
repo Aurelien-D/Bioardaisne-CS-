@@ -20,7 +20,8 @@ Aucune installation côté joueur : un navigateur récent sur PC (Chrome, Edge o
 | Rendu réaliste : matériaux physiques photographiés, ciel HDR, soleil bas et ombres dynamiques, reflets sur les sols (linos brillants, chaussée mouillée), rayons de soleil, occlusion ambiante, bloom, tonemapping filmique | ✅ |
 | Personnages animés et une centaine de vrais modèles 3D pour le décor : paillasses, poste de sécurité, chariots, mobilier de bureau, climatiseurs, véhicules, vélos, arbres… (sous licence libre, voir plus bas) | ✅ |
 | Cartes `de_rethel` et `de_charleville` | ⏳ à faire |
-| Modes **Audit surprise** (désamorçage) et **Sécurisation du laboratoire** | ⏳ à faire (désactivés dans les menus ; zones et points déjà posés sur la carte) |
+| Mode **Audit surprise** (pose et désamorçage) | ⏳ simulation faite et testée (pose, désamorçage, explosion, élimination, bots) ; interface joueur à brancher, donc pas encore proposé dans les menus |
+| Mode **Sécurisation du laboratoire** | ⏳ à faire (points déjà posés sur la carte) |
 
 ## Lancer le jeu en local
 

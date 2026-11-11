@@ -282,7 +282,28 @@ defineSound({
   },
 });
 
-// Near miss: a fast falling "fwip", sometimes with the tiny crack of the shock wave.
+// --- Near misses ----------------------------------------------------------------------
+
+/** The bullet tearing past: a narrow band of noise falling fast in pitch (Doppler), over in a blink. */
+function zip(k: Kit, at: number, dur: number, gain: number): void {
+  const hi = k.rand(5200, 7400);
+  const lo = k.rand(900, 1400);
+  const src = k.noise('white', at, dur + 0.05);
+  const bp = k.bp(hi, 6);
+  k.glide(bp.frequency, at, hi, lo, dur);
+  const env = k.gain(0);
+  k.swell(env.gain, at, gain, dur * 0.22, 0, dur * 0.78);
+  k.chain(src, bp, env, k.out);
+  // The air it pushes aside.
+  const air = k.noise('white', at, dur + 0.05);
+  const airEnv = k.gain(0);
+  k.swell(airEnv.gain, at, gain * 0.1, dur * 0.25, 0, dur * 0.5);
+  k.chain(air, k.hp(6500), airEnv, k.out);
+  // Faint tonal "zing" riding on the sweep.
+  k.tone({ at, freq: hi * 0.9, freqEnd: lo * 0.9, sweep: dur, attack: dur * 0.2, decay: dur * 0.75, gain: gain * 0.06 });
+}
+
+// A bullet passing a few metres away: only its hiss.
 defineSound({
   name: 'whizz',
   group: 'impact',
@@ -290,23 +311,25 @@ defineSound({
   dur: 0.34,
   channels: 1,
   variants: 4,
-  peak: 0.4,
-  build: (k, v) => {
-    const dur = k.vary(0.17, 0.2);
-    const hi = k.rand(4600, 6200);
-    const lo = k.rand(1000, 1500);
-    const src = k.noise('white', 0, dur + 0.05);
-    const bp = k.bp(hi, 5);
-    k.glide(bp.frequency, 0, hi, lo, dur);
-    const env = k.gain(0);
-    k.swell(env.gain, 0, 1, dur * 0.28, 0, dur * 0.72);
-    k.chain(src, bp, env, k.out);
-    const air = k.noise('white', 0, dur + 0.05);
-    const airEnv = k.gain(0);
-    k.swell(airEnv.gain, 0, 0.08, dur * 0.3, 0, dur * 0.5);
-    k.chain(air, k.hp(6500), airEnv, k.out);
-    if (v % 2 === 1) k.burst({ at: dur * 0.2, type: 'highpass', freq: 4200, attack: 0.0002, decay: 0.007, gain: 0.5 });
-    // Faint tonal "zing" riding on the sweep.
-    k.tone({ freq: hi * 0.9, freqEnd: lo * 0.9, sweep: dur, attack: dur * 0.25, decay: dur * 0.7, gain: 0.05 });
+  peak: 0.34,
+  build: (k) => zip(k, 0, k.vary(0.16, 0.2), 1),
+});
+
+// A bullet passing within arm's reach: the supersonic crack right in the ear, then the hiss.
+defineSound({
+  name: 'whizz_crack',
+  group: 'impact',
+  label: 'Balle qui claque à l’oreille',
+  dur: 0.34,
+  channels: 1,
+  variants: 4,
+  peak: 0.58,
+  build: (k) => {
+    // Shock wave: a 3 ms full-band spike, a bright snap and a tiny pressure thump.
+    k.burst({ type: 'none', attack: 0, decay: 0.003, gain: 1.4 });
+    k.burst({ type: 'highpass', freq: k.vary(2600, 0.1), attack: 0.0002, decay: k.vary(0.009, 0.2), gain: 1.6 });
+    k.burst({ type: 'bandpass', freq: k.vary(1500, 0.12), q: 1.2, attack: 0.0004, decay: 0.014, gain: 1.2 });
+    k.tone({ freq: k.vary(210, 0.1), freqEnd: 110, sweep: 0.015, attack: 0.0008, decay: 0.03, gain: 0.5 });
+    zip(k, 0.004, k.vary(0.12, 0.2), 0.55);
   },
 });
