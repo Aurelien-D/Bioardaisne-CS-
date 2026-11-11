@@ -1,7 +1,12 @@
 /**
- * End-to-end multiplayer test: two browsers join the same private room through
- * the real server, see each other, and one eliminates the other.
- * Usage: npm run build && node tools/e2e/multi.cjs [--port 8091]
+ * End-to-end multiplayer test: two browsers join the same private room, see each other,
+ * and one eliminates the other.
+ *
+ *   npm run build && node tools/e2e/multi.cjs [--port 8091]
+ *       through the real game server (WebSocket);
+ *   BAS_BASE=./ BAS_STATIC=1 npx vite build --outDir dist/static && node tools/e2e/multi.cjs --p2p
+ *       without a game server: the first browser hosts the match, the second connects to it
+ *       over WebRTC (static build served as plain files, local PeerJS broker for the handshake).
  */
 const { chromium } = require('playwright');
 const { spawn } = require('node:child_process');
@@ -12,6 +17,10 @@ const arg = (n, d) => {
   return i >= 0 ? process.argv[i + 1] : d;
 };
 const PORT = Number(arg('port', 8091));
+const P2P = process.argv.includes('--p2p');
+/** With --p2p: go through the public PeerJS cloud instead of a local broker (needs Internet access). */
+const PUBLIC_BROKER = process.argv.includes('--public-broker');
+const BROKER_PORT = Number(arg('broker', 9077));
 const OUT = path.resolve(__dirname, '../out');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const st = (page) => page.evaluate(() => window.__bas.state());
@@ -21,16 +30,30 @@ async function open(browser, name, query) {
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e)));
   await page.addInitScript((n) => localStorage.setItem('bas.settings.v1', JSON.stringify({ playerName: n, quality: 'low' })), name);
-  await page.goto(`http://localhost:${PORT}/?debug=1${query}`);
+  await page.goto(`http://localhost:${PORT}/?debug=1${P2P && !PUBLIC_BROKER ? `&peer=localhost:${BROKER_PORT}` : ''}${query}`);
   await page.waitForFunction(() => window.__bas && window.__bas.state().menu === 'main', null, { timeout: 20000 });
   return page;
 }
 
 (async () => {
   require('node:fs').mkdirSync(OUT, { recursive: true });
-  const server = spawn('node', ['dist/server/index.js'], { cwd: path.resolve(__dirname, '../..'), env: { ...process.env, PORT: String(PORT) }, stdio: 'inherit' });
-  await sleep(700);
-  const browser = await chromium.launch();
+  const root = path.resolve(__dirname, '../..');
+  let server;
+  let broker = null;
+  if (P2P) {
+    // Plain file server for the static build + a local broker: no game server anywhere.
+    const serve = `const http=require('http'),fs=require('fs'),path=require('path');const dir=path.join(${JSON.stringify(root)},'dist/static');const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.webp':'image/webp'};http.createServer((q,r)=>{let f=path.join(dir,decodeURIComponent(q.url.split('?')[0]));if(f.endsWith(path.sep)||f===dir)f=path.join(f,'index.html');fs.readFile(f,(e,b)=>{if(e){r.writeHead(404);r.end();return;}r.writeHead(200,{'content-type':types[path.extname(f)]||'application/octet-stream'});r.end(b);});}).listen(${PORT});`;
+    server = spawn('node', ['-e', serve], { cwd: root, stdio: 'inherit' });
+    if (!PUBLIC_BROKER) broker = spawn('node', ['-e', `require('peer').PeerServer({port:${BROKER_PORT},path:'/',host:'127.0.0.1'})`], { cwd: root, stdio: 'inherit' });
+    console.log(`Mode sans serveur de jeu : fichiers statiques sur ${PORT}, ${PUBLIC_BROKER ? 'courtier PeerJS public' : `courtier PeerJS local sur ${BROKER_PORT}`}`);
+  } else {
+    server = spawn('node', ['dist/server/index.js'], { cwd: root, env: { ...process.env, PORT: String(PORT) }, stdio: 'inherit' });
+  }
+  await sleep(P2P ? 1500 : 700);
+  // Headless test machines have no mDNS: let WebRTC use plain local addresses.
+  // Behind an outbound proxy (CI containers), the browser needs it to reach the public broker.
+  const proxy = PUBLIC_BROKER && process.env.HTTPS_PROXY ? { server: process.env.HTTPS_PROXY, bypass: 'localhost,127.0.0.1' } : undefined;
+  const browser = await chromium.launch({ args: P2P ? ['--disable-features=WebRtcHideLocalIpsWithMdns', ...(proxy ? ['--ignore-certificate-errors'] : [])] : [], proxy });
   let failed = false;
   const check = (name, ok, info = '') => {
     console.log(`${ok ? 'OK  ' : 'FAIL'} ${name} ${info}`);
@@ -56,8 +79,17 @@ async function open(browser, name, query) {
     await b.waitForFunction(() => window.__bas.state().mode === 'playing', null, { timeout: 240000 });
     await a.evaluate(() => window.__bas.fakeLock(true));
     await b.evaluate(() => window.__bas.fakeLock(true));
-    await a.waitForFunction(() => window.__bas.state().me && window.__bas.state().remotes.some((r) => r.alive), null, { timeout: 30000 });
-    await b.waitForFunction(() => window.__bas.state().me && window.__bas.state().remotes.some((r) => r.alive), null, { timeout: 30000 });
+    try {
+      await a.waitForFunction(() => window.__bas.state().me && window.__bas.state().remotes.some((r) => r.alive), null, { timeout: 30000 });
+      await b.waitForFunction(() => window.__bas.state().me && window.__bas.state().remotes.some((r) => r.alive), null, { timeout: 30000 });
+    } catch (err) {
+      // Diagnostic: what each side knows when the two players never see each other.
+      for (const [who, page] of [['Alice', a], ['Bob', b]]) {
+        const s = await st(page);
+        console.log(who, JSON.stringify({ mode: s.mode, menu: s.menu, room: s.room, roster: s.roster.map((p) => `${p.name}/${p.team}`), me: !!s.me, remotes: s.remotes.map((r) => `${r.id}:${r.alive}`), errors: page.errors.slice(0, 2) }));
+      }
+      throw err;
+    }
     let sa = await st(a);
     let sb = await st(b);
     check('both players in the same room', sb.room === code && sa.roster.length === 2 && sb.roster.length === 2, `roster ${sa.roster.map((p) => p.name).join(', ')}`);
@@ -121,6 +153,7 @@ async function open(browser, name, query) {
   } finally {
     await browser.close();
     server.kill();
+    if (broker) broker.kill();
   }
   process.exit(failed ? 1 : 0);
 })();

@@ -316,6 +316,8 @@ export interface PauseContext {
   config: RoomConfig;
   /** Local (solo) game. */
   local: boolean;
+  /** This browser hosts the match for the other players (no game server): leaving closes the room. */
+  hostedHere?: boolean;
 }
 
 export interface MenuCallbacks {

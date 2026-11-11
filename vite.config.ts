@@ -6,7 +6,8 @@ const SERVER_PORT = Number(process.env.BAS_SERVER_PORT ?? 8080);
  * Static hosting without a game server (GitHub Pages, any file host):
  *   BAS_BASE=./ BAS_STATIC=1 npm run build:client
  * BAS_BASE makes every URL relative to the page (it can live in a sub-folder) and
- * BAS_STATIC marks the page as solo-only (no WebSocket server behind it).
+ * BAS_STATIC marks the page as having no game server behind it: solo play runs in the page and
+ * multiplayer is hosted by one player's browser (src/client/net/p2p.ts).
  */
 const STATIC = process.env.BAS_STATIC === '1';
 
@@ -17,7 +18,7 @@ export default defineConfig({
   plugins: [
     {
       name: 'bas-static-flag',
-      transformIndexHtml: (html: string) => (STATIC ? html.replace('</head>', '    <script>window.__BAS_STANDALONE__ = true;</script>\n  </head>') : html),
+      transformIndexHtml: (html: string) => (STATIC ? html.replace('</head>', '    <script>window.__BAS_STANDALONE__ = true; window.__BAS_P2P__ = true;</script>\n  </head>') : html),
     },
   ],
   // Parallel dev servers (tooling) can use separate dependency caches.

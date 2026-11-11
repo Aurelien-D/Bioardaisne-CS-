@@ -154,7 +154,13 @@ export function createPauseScreen(ctx: MenuContext, initial: PauseContext, go: {
       h(
         'div',
         { class: 'bas-room__share' },
-        h('p', null, 'Envoyez ce lien à vos collègues : il ouvre le jeu directement dans votre salon. Le code suffit aussi, via « Rejoindre un salon ».'),
+        h(
+          'p',
+          null,
+          pause.hostedHere
+            ? 'Envoyez ce lien à vos collègues : il ouvre le jeu directement dans votre salon. Gardez cet onglet ouvert : la partie tourne dans votre navigateur.'
+            : 'Envoyez ce lien à vos collègues : il ouvre le jeu directement dans votre salon. Le code suffit aussi, via « Rejoindre un salon ».',
+        ),
         urlField,
         button({
           label: 'Copier le lien d’invitation',
@@ -321,8 +327,10 @@ export function createPauseScreen(ctx: MenuContext, initial: PauseContext, go: {
     const stay = button({ label: 'Rester', variant: 'secondary', size: 'lg', sound: 'back', onClick: closeModal });
     const text = pause.local
       ? 'La partie en cours sera perdue. Le plateau technique se débrouillera sans vous… probablement.'
-      : pause.isHost
-        ? 'Vous êtes l’hôte : le salon restera ouvert et sera confié à un autre joueur.'
+      : pause.hostedHere
+        ? 'La partie tourne dans votre navigateur : en quittant, vous fermez le salon pour tout le monde.'
+        : pause.isHost
+          ? 'Vous êtes l’hôte : le salon restera ouvert et sera confié à un autre joueur.'
         : 'Vous pourrez revenir tant que le salon est ouvert, avec le même code.';
     modal = h(
       'div',
