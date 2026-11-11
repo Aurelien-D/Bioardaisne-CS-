@@ -13,7 +13,7 @@ Aucune installation côté joueur : un navigateur récent sur PC (Chrome, Edge o
 | Déplacements « Source » (ZQSD, saut, accroupi, marche silencieuse), collisions | ✅ |
 | 8 armes en vrais modèles 3D tenus à deux mains : recul, dispersion, visée à l'épaule (optique transparente à réticule lumineux, organes de visée alignés), flash de bouche, fumée, douilles éjectées, culasses et chargeurs animés au rechargement | ✅ |
 | Bots (4 niveaux de difficulté), jeu solo sans serveur | ✅ |
-| Multijoueur : salons privés (code et lien d'invitation), serveur autoritaire, chat, tableau des scores | ✅ |
+| Multijoueur : salons privés (code et lien d'invitation), serveur autoritaire, chat, tableau des scores — avec le serveur Node, ou sans serveur en faisant héberger la partie par le navigateur d'un joueur | ✅ |
 | Mode **Match à mort par équipe** en manches | ✅ |
 | Carte `de_labo_charleville` (inspirée du site du cours Briand) | ✅ |
 | Menus, options (souris, vidéo, audio, viseur, touches), HUD complet, audio procédural | ✅ |
@@ -74,7 +74,8 @@ préférez `C` pour vous accroupir en avançant, ou passez en plein écran (F11)
 2. Dans le jeu, **Échap** affiche le **code du salon** (5 caractères) et un bouton **Copier le lien d'invitation**.
 3. Vos collègues ouvrent le lien (ou saisissent le code dans **Rejoindre un salon**).
 
-Il faut pour cela que le serveur soit joignable par tout le monde : voir ci-dessous.
+Il faut pour cela que le serveur soit joignable par tout le monde : voir ci-dessous. Sur la version GitHub Pages,
+aucun serveur n'est nécessaire : celui qui crée le salon héberge la partie dans son navigateur.
 
 ## Déployer le jeu
 
@@ -113,16 +114,30 @@ WebSockets (c'est le cas des trois cités).
 
 Contrôle de bon fonctionnement : `GET /healthz` répond `ok`, `GET /api/status` donne le nombre de salons et de joueurs.
 
-### Sur GitHub Pages (version solo uniquement)
+### Sur GitHub Pages (sans serveur)
 
-GitHub Pages ne sait servir que des fichiers : il n'y a pas de serveur de jeu derrière, donc pas de multijoueur.
-Le dépôt contient un déploiement automatique (`.github/workflows/pages.yml`) qui compile le jeu et publie la
-version solo à chaque mise à jour de `main`.
-
+GitHub Pages ne sait servir que des fichiers : il n'y a pas de serveur de jeu derrière. Le dépôt contient un
+déploiement automatique (`.github/workflows/pages.yml`) qui compile le jeu et le publie à chaque mise à jour de `main`.
 Réglage à faire une seule fois dans le dépôt : **Settings → Pages → Build and deployment → Source : « GitHub Actions »**.
-(Avec la source « Deploy from a branch », Pages sert le code source non compilé et la page reste blanche.)
+Le jeu est ensuite disponible sur `https://<compte>.github.io/<dépôt>/`.
 
-Le jeu est ensuite disponible sur `https://<compte>.github.io/<dépôt>/`. Pour produire la même version à la main :
+Cette version propose le solo **et le multijoueur entre amis, hébergé par le navigateur d'un joueur** :
+
+1. Un joueur choisit **Créer un salon privé** : la partie tourne dans son onglet (il en est l'arbitre).
+2. Il envoie le lien d'invitation (menu Échap) ; les autres l'ouvrent et se connectent directement à lui.
+
+À savoir :
+
+- L'hôte doit **garder son onglet ouvert** : s'il le ferme, la partie s'arrête pour tout le monde.
+- La mise en relation passe par le service public [PeerJS](https://peerjs.com) (seule la prise de contact y transite) ;
+  le jeu circule ensuite directement entre les navigateurs (WebRTC), qui se voient donc par leur adresse IP,
+  comme dans tout jeu en pair à pair.
+- Derrière un pare-feu strict (certains réseaux d'entreprise), la connexion directe peut échouer : essayer depuis un
+  autre réseau, ou utiliser le serveur Node décrit plus haut.
+- Débit montant de l'hôte : environ 2 Mbit/s pour un 5 contre 5.
+- `?peer=hôte:port` dans l'adresse fait passer la mise en relation par un autre serveur PeerJS (auto-hébergé).
+
+Pour produire la même version à la main :
 
 ```bash
 BAS_BASE=./ BAS_STATIC=1 npm run build:client   # dist/client, à déposer tel quel sur n'importe quel hébergeur de fichiers
@@ -149,6 +164,7 @@ Outils :
 | `node tools/shot.cjs --map <carte> --pose "x,y,z,lacet,tangage"` | Captures 3D d'une carte |
 | `npx tsx tools/sim-bench.ts --map <carte> --bots 10 --minutes 4` | Match de bots sans affichage (équilibre, blocages, performances) |
 | `node tools/e2e/solo.cjs` et `node tools/e2e/multi.cjs` | Tests de bout en bout dans un navigateur sans affichage (après `npm run build`, nécessitent Playwright) |
+| `node tools/e2e/multi.cjs --p2p` | Même test à deux joueurs **sans serveur de jeu** (après `BAS_BASE=./ BAS_STATIC=1 npx vite build --outDir dist/static`) |
 | `node tools/e2e/look.cjs` | Captures en vue subjective (hanche, visée, tir) |
 | `npm run build:client && node tools/make-artifact.mjs <fichier.html>` | Assemble le jeu en **une seule page HTML** (solo uniquement, sans serveur) |
 

@@ -20,6 +20,7 @@ import { createAudio } from '../audio';
 import type { HudFrame, IAudio, IAvatar, IEffects, IEngine, IHud, IViewModel } from '../core/contracts';
 import { radiansPerCount, SettingsStore, type KeyAction } from '../core/settings';
 import { LocalConnection, WsConnection } from '../net/connection';
+import { P2PGuest, P2PHost } from '../net/p2p';
 import { avatarOutdated, createAvatar, preloadAvatarAssets } from '../render/avatar';
 import { createEffects } from '../render/effects';
 import { createEngine } from '../render/engine';
@@ -142,6 +143,10 @@ export class Game {
   private softLock = false;
   /** Published as a single page (no game server): solo only. */
   private readonly standalone = (window as unknown as { __BAS_STANDALONE__?: boolean }).__BAS_STANDALONE__ === true;
+  /** Static hosting with browser-to-browser multiplayer: one player's tab hosts the match (net/p2p.ts). */
+  private readonly p2p = (window as unknown as { __BAS_P2P__?: boolean }).__BAS_P2P__ === true;
+  /** This tab hosts the current match for the other players. */
+  private hosting = false;
   /** Demonstration: spectate a bot match (phones, or #demo). */
   private demo = false;
   private followId = -1;
@@ -174,10 +179,16 @@ export class Game {
     this.menus = createMenus(menusRoot, this.settings, {
       playSolo: (cfg) => this.connect(new LocalConnection(cfg, this.playerName())),
       createRoom: (cfg) => {
+        // Static hosting: this browser hosts the match and the others connect to it directly.
+        if (this.p2p) {
+          this.hosting = true;
+          return this.connect(new P2PHost(cfg, this.playerName()), 'Ouverture du salon…');
+        }
         if (this.standalone) return this.menus.toast('Le multijoueur nécessite le serveur du jeu (voir le dépôt GitHub). Ici : solo contre les bots.', 'info');
         this.connect(new WsConnection(this.wsUrl(), { name: this.playerName(), create: cfg }));
       },
       joinRoom: (code) => {
+        if (this.p2p) return this.connect(new P2PGuest(code, this.playerName()), "Connexion à l'hôte de la partie…");
         if (this.standalone) return this.menus.toast('Le multijoueur nécessite le serveur du jeu (voir le dépôt GitHub). Ici : solo contre les bots.', 'info');
         this.connect(new WsConnection(this.wsUrl(), { name: this.playerName(), room: code }));
       },
@@ -234,12 +245,13 @@ export class Game {
     return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
   }
 
-  private connect(conn: Connection): void {
+  private connect(conn: Connection, label?: string): void {
     this.conn?.close();
     this.resetSession();
     this.conn = conn;
     this.mode = 'loading';
-    this.menus.showLoading(conn.local ? 'Préparation de la partie…' : 'Connexion au serveur…', 0.02);
+    if (!(conn instanceof P2PHost)) this.hosting = false;
+    this.menus.showLoading(label ?? (conn.local ? 'Préparation de la partie…' : 'Connexion au serveur…'), 0.02);
     conn.onMessage = (m) => this.onMessage(m);
     conn.onClose = (reason) => {
       if (this.conn !== conn) return;
@@ -335,6 +347,10 @@ export class Game {
       return;
     }
     this.lock();
+    if (this.hosting) {
+      this.hud.toast(`Salon ${this.roomCode ?? ''} ouvert : Échap pour copier le lien d'invitation. Gardez cet onglet ouvert, la partie tourne chez vous.`);
+      return;
+    }
     this.hud.toast('Cliquez dans le jeu pour capturer la souris — Échap pour le menu.');
   }
 
@@ -799,6 +815,7 @@ export class Game {
     this.menus.showPause({
       roomCode: this.roomCode,
       shareUrl: this.roomCode ? `${location.origin}${location.pathname}?room=${this.roomCode}` : null,
+      hostedHere: this.hosting,
       isHost: this.hostId === this.myId,
       config: this.config,
       local: this.conn?.local ?? true,

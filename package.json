@@ -20,6 +20,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "peerjs": "^1.5.5",
     "three": "^0.187.0",
     "ws": "^8.22.2"
   },
@@ -29,6 +30,7 @@
     "@types/ws": "^8.18.2",
     "concurrently": "^10.0.7",
     "esbuild": "^0.28.2",
+    "peer": "^1.0.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.7",
