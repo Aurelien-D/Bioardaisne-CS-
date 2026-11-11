@@ -75,6 +75,9 @@ const HELD_BTN: Record<string, number> = {
   use: BTN.Use,
 };
 
+/** Half size of the spectator camera's collision box (m). */
+const CHASE_HALF = { x: 0.24, y: 0.2, z: 0.24 };
+
 export class Game {
   readonly settings = new SettingsStore();
   private engine: IEngine;
@@ -1092,8 +1095,11 @@ export class Game {
     const back = forwardFromAngles(r.yaw + Math.PI, 0);
     const head = { x: r.pos.x, y: r.pos.y + 1.55, z: r.pos.z };
     const dir = { x: back.x * 0.94, y: 0.34, z: back.z * 0.94 };
-    const hit = this.world.raycast(head, dir, 3.2, MASK.Bullet);
-    const d = (hit ? Math.max(0.4, hit.dist - 0.3) : 2.9);
+    // Sweep a small box rather than a ray: the camera keeps clear of walls beside its path too,
+    // so the near plane never cuts through them.
+    const reach = 2.9;
+    const tr = this.world.sweepBox(head, CHASE_HALF, { x: dir.x * reach, y: dir.y * reach, z: dir.z * reach }, MASK.Bullet);
+    const d = tr.startSolid ? 0.25 : Math.max(0.25, reach * tr.fraction - 0.05);
     const cam = this.engine.camera;
     this.tmpV.set(head.x + dir.x * d, head.y + dir.y * d, head.z + dir.z * d);
     cam.position.lerp(this.tmpV, Math.min(1, dt * 7));

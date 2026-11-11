@@ -38,12 +38,14 @@ const MODEL_BAKED = `
 	#endif
 `;
 
-function patchMaterial(material: THREE.Material): void {
+function patchMaterial(material: THREE.Material, keepColor = false): void {
   if (material.userData.basModel) return;
   material.userData.basModel = true;
   const std = material as THREE.MeshStandardMaterial;
   // Pure white paint clips under a low sun: keep albedos in a plausible range.
-  if (std.color && !std.map) {
+  if (keepColor) {
+    /* a clone of an already adjusted material */
+  } else if (std.color && !std.map) {
     const peak = Math.max(std.color.r, std.color.g, std.color.b);
     if (peak > 0.8) std.color.multiplyScalar(0.8 / peak);
   } else if (std.color) {
@@ -81,15 +83,33 @@ export interface MapModels {
   dispose(): void;
 }
 
-export async function buildMapModels(map: MapData, sampleLight: (pos: Vec3, out: THREE.Color) => THREE.Color): Promise<MapModels> {
+/**
+ * @param interiorEnv reflection probe captured inside the building: models under a roof mirror
+ *                    it instead of the sky (chrome chair legs must not shine like outdoors).
+ */
+export async function buildMapModels(
+  map: MapData,
+  sampleLight: (pos: Vec3, out: THREE.Color) => THREE.Color,
+  interiorEnv: THREE.Texture | null = null,
+): Promise<MapModels> {
   const group = new THREE.Group();
   group.name = 'bas-models';
   const made: THREE.InstancedMesh[] = [];
+  const cloned: THREE.Material[] = [];
+  // Instances under a roof never reach the sun's shadow map (saves most of the shadow pass):
+  // each asset is drawn as one indoor batch (no shadow casting) and one outdoor batch.
+  const roofed = (m: NonNullable<MapData['models']>[number]): boolean => {
+    for (const s of map.solids) {
+      if (s.min.y > m.pos.y + 1.2 && s.min.x <= m.pos.x && s.max.x >= m.pos.x && s.min.z <= m.pos.z && s.max.z >= m.pos.z) return true;
+    }
+    return false;
+  };
   const byAsset = new Map<string, NonNullable<MapData['models']>>();
   for (const m of map.models ?? []) {
-    const list = byAsset.get(m.asset) ?? [];
+    const key = `${m.asset}|${roofed(m) ? 'in' : 'out'}`;
+    const list = byAsset.get(key) ?? [];
     list.push(m);
-    byAsset.set(m.asset, list);
+    byAsset.set(key, list);
   }
   const inst = new THREE.Matrix4();
   const q = new THREE.Quaternion();
@@ -99,15 +119,29 @@ export async function buildMapModels(map: MapData, sampleLight: (pos: Vec3, out:
   const mat4 = new THREE.Matrix4();
   const color = new THREE.Color();
   await Promise.all(
-    [...byAsset].map(async ([asset, list]) => {
+    [...byAsset].map(async ([key, list]) => {
+      const [asset, where] = key.split('|') as [string, string];
       const tpl = await loadTemplate(asset);
       if (!tpl) return;
       tpl.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;
         for (const mm of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) patchMaterial(mm);
-        const im = new THREE.InstancedMesh(mesh.geometry, mesh.material, list.length);
-        im.castShadow = true;
+        let material = mesh.material;
+        if (where === 'in' && interiorEnv) {
+          const indoor = (src: THREE.Material): THREE.Material => {
+            const copy = src.clone() as THREE.MeshStandardMaterial;
+            copy.userData = {};
+            patchMaterial(copy, true);
+            copy.envMap = interiorEnv;
+            copy.envMapIntensity = 1;
+            cloned.push(copy);
+            return copy;
+          };
+          material = Array.isArray(mesh.material) ? mesh.material.map(indoor) : indoor(mesh.material);
+        }
+        const im = new THREE.InstancedMesh(mesh.geometry, material, list.length);
+        im.castShadow = where === 'out';
         im.receiveShadow = true;
         for (let i = 0; i < list.length; i++) {
           const m = list[i]!;
@@ -134,6 +168,7 @@ export async function buildMapModels(map: MapData, sampleLight: (pos: Vec3, out:
     dispose() {
       group.removeFromParent();
       for (const im of made) im.dispose();
+      for (const m of cloned) m.dispose();
     },
   };
 }

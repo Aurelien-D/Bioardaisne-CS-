@@ -14,8 +14,8 @@ interface PhotoDef {
   tint?: 'match' | number;
 }
 
-const PLASTER: PhotoDef = { set: 'painted_plaster_wall', size: 3, tint: 'match' };
-const FACADE: PhotoDef = { set: 'grey_plaster', size: 3.5, tint: 'match' };
+const PLASTER: PhotoDef = { set: 'plastered_wall_04', size: 3, tint: 'match' };
+const FACADE: PhotoDef = { set: 'beige_wall_001', size: 3, tint: 'match' };
 const TERRAZZO: PhotoDef = { set: 'Terrazzo013', size: 1.0, tint: 'match' };
 const CARPET: PhotoDef = { set: 'Carpet016', size: 1.2, tint: 'match' };
 const PHOTO: Partial<Record<MaterialId, PhotoDef>> = {
@@ -26,7 +26,8 @@ const PHOTO: Partial<Record<MaterialId, PhotoDef>> = {
   concrete_dark: { set: 'concrete_wall_008', size: 2.6, tint: 0.6 },
   brick_red: { set: 'brick_wall_001', size: 1.7, tint: 1.25 },
   brick_brown: { set: 'brick_wall_001', size: 1.7 },
-  tile_beige: { set: 'floor_tiles_06', size: 2.4, tint: 1.35 },
+  tile_beige: { set: 'interior_tiles', size: 2.4, tint: 1.2 },
+  shutter: { set: 'painted_metal_shutter', size: 2, tint: 'match' },
   tile_white: { set: 'large_floor_tiles_02', size: 2.4, tint: 1.7 },
   gravel: { set: 'gravel_floor_02', size: 2.2 },
   // ambientCG (CC0)
@@ -52,7 +53,7 @@ const PHOTO: Partial<Record<MaterialId, PhotoDef>> = {
   facade_pink: FACADE,
 };
 /** Average colour of the neutral photos (to recolour them). */
-const AVERAGE: Record<string, number> = { painted_plaster_wall: 0xaba3a0, grey_plaster: 0x8b8674, Terrazzo013: 0xd1ccc7, Carpet016: 0xbcb093, Metal009: 0x929598 };
+const AVERAGE: Record<string, number> = { plastered_wall_04: 0x8c8a87, beige_wall_001: 0x9e8c78, painted_metal_shutter: 0x808386, Terrazzo013: 0xd1ccc7, Carpet016: 0xbcb093, Metal009: 0x929598 };
 
 interface Loaded {
   map: THREE.Texture;

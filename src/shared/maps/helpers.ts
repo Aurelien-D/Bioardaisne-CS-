@@ -128,6 +128,12 @@ export interface WallOpts {
   tint?: number;
   /** Skirting board along the bottom of one or both faces (skips doorways). */
   skirting?: { mat: MaterialId; side?: 'pos' | 'neg' | 'both'; height?: number };
+  /**
+   * Horizontal bands fixed on the wall (wall-protection rails, dados, string courses, cornices):
+   * `y` = bottom of the band above the wall base, `depth` = how far it stands out (default 0.02).
+   * A band runs wherever the wall is solid over its whole height (it skips doors and windows).
+   */
+  bands?: { mat: MaterialId; y: number; height: number; side?: 'pos' | 'neg' | 'both'; depth?: number }[];
   /** Create colliders (default true). */
   solid?: boolean;
 }
@@ -328,6 +334,26 @@ export function wall(b: MapBuilder, o: WallOpts): WallInfo {
     for (const [t0, t1] of runs) {
       if (side !== 'neg') axisBox(b, axis, o.x0, o.z0, s * t0, s * t1, y0, y0 + h, half, half + 0.015, sk.mat, DECO);
       if (side !== 'pos') axisBox(b, axis, o.x0, o.z0, s * t0, s * t1, y0, y0 + h, -half - 0.015, -half, sk.mat, DECO);
+    }
+  }
+
+  // Bands: continuous runs wherever the wall is solid over the band's height.
+  for (const band of o.bands ?? []) {
+    const lo = band.y;
+    const hi = band.y + band.height;
+    if (!(band.height > MIN_SIZE) || hi > height + EPS) continue;
+    const runs: [number, number][] = [];
+    for (const col of cols) {
+      if (!col.solids.some(([a, c]) => a <= lo + EPS && c >= hi - EPS)) continue;
+      const last = runs[runs.length - 1];
+      if (last && Math.abs(last[1] - col.t0) < EPS) last[1] = col.t1;
+      else runs.push([col.t0, col.t1]);
+    }
+    const side = band.side ?? 'both';
+    const d = band.depth ?? 0.02;
+    for (const [t0, t1] of runs) {
+      if (side !== 'neg') axisBox(b, axis, o.x0, o.z0, s * t0, s * t1, y0 + lo, y0 + hi, half, half + d, band.mat, DECO);
+      if (side !== 'pos') axisBox(b, axis, o.x0, o.z0, s * t0, s * t1, y0 + lo, y0 + hi, -half - d, -half, band.mat, DECO);
     }
   }
 

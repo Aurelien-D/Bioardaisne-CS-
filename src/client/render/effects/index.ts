@@ -4,8 +4,11 @@ import type { SurfaceType } from '../../../shared/maps/materials';
 import type { Vec3 } from '../../../shared/math/vec3';
 import { WEAPONS, type WeaponId } from '../../../shared/weapons/defs';
 import type { IEffects, IEngine } from '../../core/contracts';
+import { flashClass, MuzzleFlash } from './flash';
 
 const MAX_TRACERS = 64;
+/** Muzzle flashes of the other players visible at the same time. */
+const MAX_FLASHES = 8;
 const MAX_DECALS = 256;
 const MAX_PARTICLES = 700;
 
@@ -166,6 +169,9 @@ class Effects implements IEffects {
   private v3 = new THREE.Vector3();
   private col = new THREE.Color();
   private dot: THREE.Texture;
+  private flashes: MuzzleFlash[] = [];
+  private fNext = 0;
+  private fLive = false;
 
   constructor(private engine: IEngine) {
     this.root.name = 'bas-effects';
@@ -193,6 +199,12 @@ class Effects implements IEffects {
     this.dust = new Particles(this.dot, false, 0.16);
     this.sparks = new Particles(this.dot, true, 0.09);
     this.root.add(this.decals, this.tracers, this.dust.points, this.sparks.points);
+    // Same flash sprites as the first-person weapon (textures and geometry are shared).
+    for (let i = 0; i < MAX_FLASHES; i++) {
+      const f = new MuzzleFlash(false);
+      this.flashes.push(f);
+      this.root.add(f.group);
+    }
   }
 
   tracer(from: Vec3, to: Vec3, weapon: WeaponId): void {
@@ -244,11 +256,25 @@ class Effects implements IEffects {
   }
 
   muzzleFlash(pos: Vec3, dir: Vec3, weapon: WeaponId): void {
-    if (WEAPONS[weapon].kind === 'melee') return;
-    for (let k = 0; k < 4; k++) {
-      const s = 1 + k * 1.5;
-      this.sparks.emit(pos, dir.x * s, dir.y * s, dir.z * s, 1, 0.8, 0.45, 1, 0.05, 0);
+    const def = WEAPONS[weapon];
+    if (def.kind === 'melee') return;
+    // Textured flash at the muzzle, along the barrel.
+    const f = this.flashes[this.fNext]!;
+    this.fNext = (this.fNext + 1) % MAX_FLASHES;
+    f.group.position.set(pos.x, pos.y, pos.z);
+    this.v1.set(dir.x, dir.y, dir.z);
+    if (this.v1.lengthSq() < 1e-8) this.v1.set(0, 0, -1);
+    f.group.quaternion.setFromUnitVectors(this.v2.set(0, 0, -1), this.v1.normalize());
+    f.fire(flashClass(def.category), 1.2);
+    this.fLive = true;
+    // A few hot sparks and a puff of grey smoke drifting up.
+    for (let k = 0; k < 2; k++) {
+      const s = 2.5 + k * 2.5;
+      this.sparks.emit(pos, dir.x * s + (Math.random() - 0.5), dir.y * s + (Math.random() - 0.5), dir.z * s + (Math.random() - 0.5), 1, 0.8, 0.45, 1, 0.06 + Math.random() * 0.05, 0);
     }
+    const heavy = def.category === 'shotgun' || def.category === 'sniper';
+    const g = 0.5 + Math.random() * 0.12;
+    this.dust.emit(pos, dir.x * 1.6, dir.y * 1.6 + 0.3, dir.z * 1.6, g, g, g * 1.03, heavy ? 0.3 : 0.16, 0.45 + Math.random() * 0.3, -0.5);
   }
 
   explosion(pos: Vec3): void {
@@ -346,6 +372,12 @@ class Effects implements IEffects {
     if (dd) this.decals.instanceMatrix.needsUpdate = true;
     this.dust.update(dt);
     this.sparks.update(dt);
+    if (this.fLive) {
+      // Keep going until every flash has ended, whatever the frame rate.
+      let alive = false;
+      for (let i = 0; i < MAX_FLASHES; i++) alive = this.flashes[i]!.update(dt) || alive;
+      this.fLive = alive;
+    }
     for (const m of this.markers) {
       const s = 1 + Math.sin(this.time * 4) * 0.18;
       m.ring.scale.set(s, 1, s);
@@ -362,10 +394,16 @@ class Effects implements IEffects {
     this.decals.instanceMatrix.needsUpdate = true;
     this.dust.clear();
     this.sparks.clear();
+    for (const f of this.flashes) {
+      f.update(1);
+      f.update(1);
+    }
+    this.fLive = false;
   }
 
   dispose(): void {
     this.root.removeFromParent();
+    for (const f of this.flashes) f.dispose();
     this.dust.dispose();
     this.sparks.dispose();
     this.tracers.geometry.dispose();

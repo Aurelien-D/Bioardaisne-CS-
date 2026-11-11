@@ -17,8 +17,9 @@
 import { createEnvironment, loadHdrSky, type HdrSky } from './env';
 import { preloadPhotoTextures } from './textures/photo';
 import type { MaterialId } from '../../shared/maps/materials';
-import { createPost, type Post } from './post';
+import { createPost, softwareRenderer, type Post } from './post';
 import { buildMapModels, type MapModels } from './world/models';
+import { FloorReflection } from './world/reflection';
 import * as THREE from 'three';
 import { DEFAULT_ENV } from '../../shared/maps/builder';
 import type { EnvDef, MapData } from '../../shared/maps/types';
@@ -45,6 +46,43 @@ const PIXEL_RATIO_CAP: Record<Quality, number> = { low: 1, medium: 1.5, high: 2 
 
 /** Neutral rig for dynamic objects: lit side ≈ 1.1 × albedo, shaded side ≈ 0.5 × albedo. */
 const RIG_HEMI = Math.PI * 0.62;
+/** Automatic fallback: below this frame rate for a few seconds, the best preset sheds effects. */
+const ADAPT_MIN_FPS = 34;
+/** Render-resolution factor of each fallback step (step 1 only drops the floor reflections). */
+const ADAPT_SCALES = [1, 1, 0.8, 0.62];
+/** Resolution of the floor-reflection render, relative to the screen. */
+const REFLECTION_SCALE = 0.5;
+
+/**
+ * Heights of the large walkable floors of a map (ground, upper storeys), lowest first.
+ * Floors within 30 cm of each other (a kerb, a door sill) share one mirror plane.
+ */
+function floorLevelsOf(map: MapData): number[] {
+  const tops: { y: number; area: number }[] = [];
+  for (const b of map.boxes) {
+    if (b.detail) continue;
+    const area = (b.max.x - b.min.x) * (b.max.z - b.min.z);
+    if (area < 16 || b.max.y - b.min.y > 1) continue;
+    tops.push({ y: b.max.y, area });
+  }
+  tops.sort((a, b) => a.y - b.y);
+  const levels: number[] = [];
+  let sum = 0;
+  let weight = 0;
+  let start = -Infinity;
+  for (const t of tops) {
+    if (weight > 0 && t.y - start > 0.3) {
+      levels.push(sum / weight);
+      sum = 0;
+      weight = 0;
+    }
+    if (weight === 0) start = t.y;
+    sum += t.y * t.area;
+    weight += t.area;
+  }
+  if (weight > 0) levels.push(sum / weight);
+  return levels;
+}
 const RIG_SUN = Math.PI * 0.55;
 
 const nextTask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -66,6 +104,9 @@ class Engine implements IEngine {
   private readonly resizeObserver: ResizeObserver | null;
   private readonly startTime = performance.now();
   private readonly tmpQuat = new THREE.Quaternion();
+  private readonly tmpDir = new THREE.Vector3();
+  private readonly tmpSize = new THREE.Vector2();
+  private readonly tmpSun = new THREE.Vector3();
   /** Number of objects the engine itself keeps in the overlay scene (camera + light rig). */
   private readonly viewRigSize: number;
 
@@ -86,6 +127,19 @@ class Engine implements IEngine {
   private hdr: HdrSky | null = null;
   private interiorEnv: THREE.Texture | null = null;
   private models: MapModels | null = null;
+  /** Planar floor reflections (best preset only) and the floor levels of the current map, lowest first. */
+  private reflection: FloorReflection | null = null;
+  private floorLevels: number[] = [];
+  /**
+   * Automatic fallback when the machine cannot keep up (best preset): step 1 drops the floor
+   * reflections, steps 2 and 3 lower the render resolution. Reset by a new map or preset.
+   */
+  private adaptStep = 0;
+  private adaptSlow = 0;
+  private adaptFrames = 0;
+  private lastFrame = 0;
+  private frameMs = 16;
+  private software: boolean | null = null;
   private width = 0;
   private height = 0;
   private disposed = false;
@@ -265,7 +319,7 @@ class Engine implements IEngine {
       this.captureInterior(map, materials);
       // Real 3D models (furniture, vehicles…), instanced and tinted by the baked light.
       if (map.models?.length) {
-        const models = await buildMapModels(map, (pos, out) => this.sampleLight(pos, out));
+        const models = await buildMapModels(map, (pos, out) => this.sampleLight(pos, out), this.interiorEnv);
         if (!wanted()) {
           models.dispose();
           return;
@@ -274,6 +328,10 @@ class Engine implements IEngine {
         this.scene.add(models.group);
       }
       this.fitShadow(map);
+      this.floorLevels = floorLevelsOf(map);
+      this.adaptStep = 0;
+      this.adaptSlow = 0;
+      this.adaptFrames = 0;
 
       // Compile the shaders and upload the textures now rather than on the first frame.
       onProgress?.(0.95, 'Derniers contrôles qualité…');
@@ -294,6 +352,8 @@ class Engine implements IEngine {
     this.world?.dispose();
     this.models?.dispose();
     this.models = null;
+    this.floorLevels = [];
+    this.reflection?.off();
     this.signs?.dispose();
     this.materials?.dispose();
     this.lightmap?.dispose();
@@ -338,7 +398,7 @@ class Engine implements IEngine {
       this.scene.background = hdr.background;
       this.scene.backgroundRotation.set(0, theta, 0);
       this.scene.environmentRotation.set(0, theta, 0);
-      this.scene.backgroundIntensity = 1;
+      this.scene.backgroundIntensity = 0.72;
       this.scene.environment = hdr.env;
       this.viewScene.environment = hdr.env;
       this.sky.mesh.visible = false;
@@ -443,6 +503,9 @@ class Engine implements IEngine {
     const quality = this.settings.value.quality;
     if (quality !== this.quality) {
       this.quality = quality;
+      this.adaptStep = 0;
+      this.adaptSlow = 0;
+      this.adaptFrames = 0;
       // Antialiasing is fixed at context creation; textures and resolution follow at once.
       this.materials?.setQuality(quality);
     }
@@ -456,13 +519,14 @@ class Engine implements IEngine {
     const h = this.canvas.clientHeight || this.canvas.height;
     if (w <= 0 || h <= 0) return;
     const scale = Math.min(1, Math.max(0.25, this.settings.value.resolutionScale || 1));
-    const ratio = Math.min(window.devicePixelRatio || 1, PIXEL_RATIO_CAP[this.quality]) * scale;
+    const ratio = Math.min(window.devicePixelRatio || 1, PIXEL_RATIO_CAP[this.quality]) * scale * ADAPT_SCALES[this.adaptStep]!;
     if (w === this.width && h === this.height && ratio === this.renderer.getPixelRatio()) return;
     this.width = w;
     this.height = h;
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(w, h, false);
     this.post?.setSize(w, h, ratio);
+    this.reflection?.setSize(w * ratio * REFLECTION_SCALE, h * ratio * REFLECTION_SCALE);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.viewCamera.aspect = w / h;
@@ -470,6 +534,51 @@ class Engine implements IEngine {
   }
 
   // --- Frame ----------------------------------------------------------------------
+
+  /** Watches the frame time on the best preset and sheds the costliest effects when it stays too slow. */
+  private adapt(): void {
+    const now = performance.now();
+    const dt = now - this.lastFrame;
+    this.lastFrame = now;
+    if (this.quality !== 'high' || !this.world || this.adaptStep >= ADAPT_SCALES.length - 1 || this.software) return;
+    if (dt <= 0 || dt > 500) return; // first frame, tab in the background, loading hitch
+    this.frameMs += (dt - this.frameMs) * 0.05;
+    // Let shaders compile and textures upload before judging.
+    if (++this.adaptFrames < 90) return;
+    this.adaptSlow = this.frameMs > 1000 / ADAPT_MIN_FPS ? this.adaptSlow + dt : Math.max(0, this.adaptSlow - dt * 2);
+    if (this.adaptSlow < 3500) return;
+    this.adaptStep++;
+    this.adaptSlow = 0;
+    this.adaptFrames = 30;
+    this.frameMs = 16;
+    this.sizeDirty = true;
+    console.info(`[rendu] Machine trop juste pour le réglage « élevé » : allègement automatique (palier ${this.adaptStep}).`);
+  }
+
+  /** Where the sun is on screen and how strongly it should streak (light shafts of the post chain). */
+  private updateShafts(): void {
+    const post = this.post;
+    if (!post) return;
+    if (this.sun.intensity <= 0) {
+      post.setSun(0.5, 0.5, 0, this.sun.color);
+      return;
+    }
+    const cam = this.camera;
+    cam.getWorldDirection(this.tmpDir);
+    const facing = this.tmpDir.dot(this.sunDir);
+    if (facing <= 0.05) {
+      post.setSun(0.5, 0.5, 0, this.sun.color);
+      return;
+    }
+    this.tmpSun.copy(this.sunDir).multiplyScalar(500).add(cam.position).project(cam);
+    const u = this.tmpSun.x * 0.5 + 0.5;
+    const v = this.tmpSun.y * 0.5 + 0.5;
+    // Fade when the sun leaves the screen (shafts from just outside the frame still read well).
+    const out = Math.max(Math.abs(this.tmpSun.x), Math.abs(this.tmpSun.y));
+    const edge = 1 - Math.min(1, Math.max(0, (out - 1.05) / 0.7));
+    const k = Math.min(1, (facing - 0.05) / 0.35) * edge;
+    post.setSun(u, v, 0.34 * k, this.sun.color);
+  }
 
   render(): void {
     if (this.disposed) return;
@@ -482,12 +591,33 @@ class Engine implements IEngine {
     renderer.info.reset();
     this.tmpQuat.copy(this.camera.quaternion).invert();
     this.viewSun.position.copy(this.sunDir).applyQuaternion(this.tmpQuat).multiplyScalar(5);
+    // One shadow-map update per frame, whatever the number of scene renders (reflection, AO, main).
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
+    this.adapt();
+    if (this.software === null) this.software = softwareRenderer(renderer);
+    if (this.quality === 'high' && this.adaptStep === 0 && !this.software && this.materials && this.floorLevels.length) {
+      // Mirror image of the scene about the floor under the camera, for the glossy floors.
+      if (!this.reflection) {
+        const size = renderer.getDrawingBufferSize(this.tmpSize);
+        this.reflection = new FloorReflection(size.x * REFLECTION_SCALE, size.y * REFLECTION_SCALE);
+      }
+      this.materials.setReflection(this.reflection.uniforms);
+      const eye = this.camera.position.y;
+      let level = this.floorLevels[0]!;
+      for (const l of this.floorLevels) if (l <= eye - 0.45) level = l;
+      this.reflection.render(renderer, this.scene, this.camera, level);
+    } else if (this.reflection) {
+      this.reflection.off();
+      this.materials?.setReflection(null);
+    }
     if (this.quality !== 'low') {
       // Filmic pipeline: HDR + bloom + tone mapping + grade.
       if (!this.post) {
         this.post = createPost(renderer, this.scene, this.camera, this.viewScene, this.viewCamera, this.quality);
         this.post.setSize(this.width, this.height, renderer.getPixelRatio());
       }
+      this.updateShafts();
       this.post.render(time);
       return;
     }
@@ -512,6 +642,7 @@ class Engine implements IEngine {
     this.resizeObserver?.disconnect();
     this.sky.dispose();
     this.post?.dispose();
+    this.reflection?.dispose();
     this.envMap?.dispose();
     disposeMaterialTextures();
     this.renderer.dispose();

@@ -22,20 +22,23 @@ export const BRAND_COLORS = {
   blue: '#3182ce',
 } as const;
 
+/** URL of a file of /public, relative to the page so the game also works from a sub-folder (GitHub Pages…). */
+const asset = (path: string): string => (typeof document === 'undefined' ? `/${path}` : new URL(path, document.baseURI).href);
+
 /** Raster logos served from /public/brand (transparent PNG). */
 export const BRAND_LOGO = {
   /** Monogram + "LABORATOIRE bio ard'aisne", grey text — for light backgrounds. 1164 × 310. */
-  horizontal: '/brand/logo-horizontal.png',
+  horizontal: asset('brand/logo-horizontal.png'),
   /** Same with white text — for dark backgrounds. */
-  horizontalDark: '/brand/logo-horizontal-dark.png',
+  horizontalDark: asset('brand/logo-horizontal-dark.png'),
   /** Stacked version, grey text. 861 × 599. */
-  vertical: '/brand/logo-vertical.png',
+  vertical: asset('brand/logo-vertical.png'),
   /** Stacked version, white text. */
-  verticalDark: '/brand/logo-vertical-dark.png',
+  verticalDark: asset('brand/logo-vertical-dark.png'),
   /** Red "ba" monogram alone. 822 × 750. */
-  monogram: '/brand/monogram-red.png',
+  monogram: asset('brand/monogram-red.png'),
   /** Vector monogram (red). */
-  monogramSvg: '/brand/monogram.svg',
+  monogramSvg: asset('brand/monogram.svg'),
 } as const;
 
 /** Vector outline of the "ba" monogram. Fill it with BRAND_COLORS.red (or white on a red / blue plate). */

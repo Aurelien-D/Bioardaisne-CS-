@@ -13,6 +13,7 @@
  * A lightmap can be attached to every material with `setLightMap()` (used by the
  * light-mapping pass together with the uv1 set written by faces.ts).
  */
+import type { ReflectionUniforms } from './reflection';
 import * as THREE from 'three';
 import { materialInfo, type MaterialId } from '../../../shared/maps/materials';
 import type { Quality } from '../../core/settings';
@@ -73,15 +74,52 @@ const LIGHTS_BEGIN = THREE.ShaderChunk.lights_fragment_begin.replace(
   'irradiance += getHemisphereLightIrradiance( hemisphereLights[ i ], geometryNormal );',
   '',
 );
-const LIGHTS_MAPS = THREE.ShaderChunk.lights_fragment_maps
-  .replace('iblIrradiance += getIBLIrradiance( geometryNormal );', '')
-  .replace(
-    'radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );',
-    `radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );
+const LIGHTS_MAPS =
+  THREE.ShaderChunk.lights_fragment_maps
+    .replace('iblIrradiance += getIBLIrradiance( geometryNormal );', '')
+    .replace(
+      'radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );',
+      `radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );
 	#ifdef USE_LIGHTMAP
 		radiance *= clamp( dot( lightMapTexel.rgb, vec3( 0.3333 ) ) * lightMapIntensity * 0.42, 0.04, 1.0 );
 	#endif`,
-  );
+    ) + '\n__BAS_REFLECT_APPLY__';
+
+/**
+ * Glossy floors: where a planar reflection of the scene is available (reflection.ts) and the
+ * fragment lies on the mirrored floor, it replaces the static probe. Mip level = blur by roughness.
+ */
+const REFLECTIVE_SURF = new Set(['lino', 'tile']);
+const REFLECTIVE_ID = new Set<string>(['asphalt', 'sidewalk', 'concrete_floor', 'paving_stone', 'cobble', 'parquet']);
+const REFLECT_PARS = /* glsl */ `
+#ifdef BAS_REFLECT
+	uniform sampler2D basRefl;
+	uniform mat4 basReflMatrix;
+	uniform float basReflPlane;
+	uniform float basReflOn;
+#endif
+`;
+/** A glossy floor facing a low sun: keep the glare from bleaching the whole ground. */
+const SPEC_CLAMP = /* glsl */ `
+#ifdef BAS_REFLECT
+	reflectedLight.directSpecular = min( reflectedLight.directSpecular, vec3( BAS_SPEC_MAX ) );
+#endif
+`;
+const REFLECT_APPLY = /* glsl */ `
+#if defined( BAS_REFLECT ) && defined( RE_IndirectSpecular )
+	if ( basReflOn > 0.5 ) {
+		vec3 basWp = ( vec4( - vViewPosition, 0.0 ) * viewMatrix ).xyz + cameraPosition;
+		vec3 basWn = inverseTransformDirection( normal, viewMatrix );
+		if ( abs( basWp.y - basReflPlane ) < 0.3 && basWn.y > 0.6 ) {
+			vec4 basRc = basReflMatrix * vec4( basWp.x, basReflPlane, basWp.z, 1.0 );
+			// The surface relief (normal map) ripples the mirror image.
+			vec2 basRuv = basRc.xy / basRc.w + basWn.xz * 0.045;
+			float basLod = clamp( material.roughness * 8.5 - 0.6, 0.0, 6.5 );
+			radiance = textureLod( basRefl, clamp( basRuv, 0.002, 0.998 ), basLod ).rgb * BAS_REFLECT_GAIN;
+		}
+	}
+#endif
+`;
 
 const normalCache = new Map<string, THREE.CanvasTexture>();
 
@@ -160,6 +198,7 @@ export class WorldMaterials {
   private lightMap: THREE.Texture | null = null;
   private lightMapIntensity = 1;
   private interiorEnv: THREE.Texture | null = null;
+  private reflection: ReflectionUniforms | null = null;
 
   constructor(quality: Quality) {
     this.quality = quality;
@@ -204,10 +243,26 @@ export class WorldMaterials {
     }
     const water = info.surf === 'water';
     const time = this.time;
+    const reflective = !info.transparent && !info.emissive && (REFLECTIVE_SURF.has(info.surf) || REFLECTIVE_ID.has(id));
+    if (reflective) {
+      // Outdoor ground is damp after a shower: smoother than the dry photo, so it mirrors the low sun.
+      const outdoor = id === 'asphalt' || id === 'sidewalk' || id === 'paving_stone' || id === 'cobble';
+      if (outdoor) m.roughness *= id === 'asphalt' ? 0.7 : 0.78;
+      m.defines = { ...m.defines, BAS_REFLECT: '', BAS_REFLECT_GAIN: outdoor ? '0.9' : '1.0', BAS_SPEC_MAX: outdoor ? '0.55' : '2.5' };
+    }
     m.onBeforeCompile = (shader) => {
+      const refl = this.reflection;
+      if (reflective && refl) {
+        shader.uniforms.basRefl = refl.basRefl;
+        shader.uniforms.basReflMatrix = refl.basReflMatrix;
+        shader.uniforms.basReflPlane = refl.basReflPlane;
+        shader.uniforms.basReflOn = refl.basReflOn;
+      }
+      const usesRefl = reflective && refl !== null;
       shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', usesRefl ? `#include <common>\n${REFLECT_PARS}` : '#include <common>')
         .replace('#include <lights_fragment_begin>', LIGHTS_BEGIN)
-        .replace('#include <lights_fragment_maps>', LIGHTS_MAPS);
+        .replace('#include <lights_fragment_maps>', LIGHTS_MAPS.replace('__BAS_REFLECT_APPLY__', (reflective ? SPEC_CLAMP : '') + (usesRefl ? REFLECT_APPLY : '')));
       if (water) {
         shader.uniforms.basTime = time;
         shader.fragmentShader = shader.fragmentShader
@@ -215,7 +270,7 @@ export class WorldMaterials {
           .replace('#include <map_fragment>', WATER_MAP_FRAGMENT);
       }
     };
-    m.customProgramCacheKey = () => (water ? 'bas-world-water' : 'bas-world');
+    m.customProgramCacheKey = () => (water ? 'bas-world-water' : reflective ? (this.reflection ? 'bas-world-refl' : 'bas-world-gloss') : 'bas-world');
     if (this.lightMap) {
       m.lightMap = this.lightMap;
       m.lightMapIntensity = this.lightMapIntensity;
@@ -269,6 +324,13 @@ export class WorldMaterials {
       m.envMapIntensity = texture ? 1.15 : 0.9;
       m.needsUpdate = true;
     }
+  }
+
+  /** Planar floor reflections (reflection.ts): glossy floors sample them from now on. null = static probe only. */
+  setReflection(uniforms: ReflectionUniforms | null): void {
+    if (uniforms === this.reflection) return;
+    this.reflection = uniforms;
+    for (const m of this.materials.values()) if (m.defines && 'BAS_REFLECT' in m.defines) m.needsUpdate = true;
   }
 
   /** Per-frame animation (water shimmer). */

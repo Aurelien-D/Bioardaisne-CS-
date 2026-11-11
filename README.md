@@ -11,14 +11,14 @@ Aucune installation côté joueur : un navigateur récent sur PC (Chrome, Edge o
 | Élément | État |
 |---|---|
 | Déplacements « Source » (ZQSD, saut, accroupi, marche silencieuse), collisions | ✅ |
-| 8 armes (recul, dispersion, rechargement, visée à l'épaule, lunette) en vrais modèles 3D tenus à deux mains | ✅ |
+| 8 armes en vrais modèles 3D tenus à deux mains : recul, dispersion, visée à l'épaule (optique transparente à réticule lumineux, organes de visée alignés), flash de bouche, fumée, douilles éjectées, culasses et chargeurs animés au rechargement | ✅ |
 | Bots (4 niveaux de difficulté), jeu solo sans serveur | ✅ |
 | Multijoueur : salons privés (code et lien d'invitation), serveur autoritaire, chat, tableau des scores | ✅ |
 | Mode **Match à mort par équipe** en manches | ✅ |
 | Carte `de_labo_charleville` (inspirée du site du cours Briand) | ✅ |
 | Menus, options (souris, vidéo, audio, viseur, touches), HUD complet, audio procédural | ✅ |
-| Rendu réaliste : matériaux physiques photographiés, ciel HDR, soleil et ombres dynamiques, occlusion ambiante, bloom, tonemapping filmique | ✅ |
-| Personnages animés, mobilier, véhicules et arbres en vrais modèles 3D (sous licence libre, voir plus bas) | ✅ |
+| Rendu réaliste : matériaux physiques photographiés, ciel HDR, soleil bas et ombres dynamiques, reflets sur les sols (linos brillants, chaussée mouillée), rayons de soleil, occlusion ambiante, bloom, tonemapping filmique | ✅ |
+| Personnages animés et une centaine de vrais modèles 3D pour le décor : paillasses, poste de sécurité, chariots, mobilier de bureau, climatiseurs, véhicules, vélos, arbres… (sous licence libre, voir plus bas) | ✅ |
 | Cartes `de_rethel` et `de_charleville` | ⏳ à faire |
 | Modes **Audit surprise** (désamorçage) et **Sécurisation du laboratoire** | ⏳ à faire (désactivés dans les menus ; zones et points déjà posés sur la carte) |
 
@@ -113,6 +113,21 @@ WebSockets (c'est le cas des trois cités).
 
 Contrôle de bon fonctionnement : `GET /healthz` répond `ok`, `GET /api/status` donne le nombre de salons et de joueurs.
 
+### Sur GitHub Pages (version solo uniquement)
+
+GitHub Pages ne sait servir que des fichiers : il n'y a pas de serveur de jeu derrière, donc pas de multijoueur.
+Le dépôt contient un déploiement automatique (`.github/workflows/pages.yml`) qui compile le jeu et publie la
+version solo à chaque mise à jour de `main`.
+
+Réglage à faire une seule fois dans le dépôt : **Settings → Pages → Build and deployment → Source : « GitHub Actions »**.
+(Avec la source « Deploy from a branch », Pages sert le code source non compilé et la page reste blanche.)
+
+Le jeu est ensuite disponible sur `https://<compte>.github.io/<dépôt>/`. Pour produire la même version à la main :
+
+```bash
+BAS_BASE=./ BAS_STATIC=1 npm run build:client   # dist/client, à déposer tel quel sur n'importe quel hébergeur de fichiers
+```
+
 ### Dimensionnement
 
 Le serveur est léger : un match de 12 joueurs consomme moins de 1 % d'un cœur de processeur. Les salons vides
@@ -165,8 +180,12 @@ Collisions, rendu, éclairage et navigation des bots sont dérivés automatiquem
 - Éclairage précalculé : trois contrôles de qualité ne sont pas encore atteints (raccord de lumière entre deux
   dalles de sol, soleil à travers une vitre, exposition de l'arène de test). Ils sont marqués comme défauts
   connus dans `tests/lightbake.test.ts`.
-- Une partie du mobilier de laboratoire (automates, paillasses, hottes) reste modélisée par le code, faute de modèles libres convaincants.
+- Quelques équipements restent modélisés par le code, faute de modèles libres convaincants : grands automates, convoyeur,
+  centrifugeuses, fauteuil de prélèvement, banque d'accueil et petits objets de paillasse.
 - En qualité « basse », les modèles 3D d'armes et de personnages sont remplacés par leurs versions simplifiées.
+- Les reflets de sol et l'occlusion ambiante n'existent qu'en qualité « élevée » (réglage par défaut). Si la machine ne
+  tient pas 34 images par seconde, le jeu retire de lui-même les reflets puis baisse la résolution ; sans accélération
+  graphique (rendu logiciel), ces effets sont coupés d'office. Pour un PC modeste, choisir « moyenne » ou « basse ».
 - La visée à l'épaule est visuelle (zoom et alignement du viseur) : elle ne modifie pas la précision calculée par le serveur.
 - Jeu pensé pour PC (clavier et souris) ; pas de version mobile.
 
@@ -184,7 +203,7 @@ Assets tiers du dossier `public/media/` :
 | Personnage animé (`media/models/soldier.json`, converti depuis `Soldier.glb`) | Exemples de [three.js](https://github.com/mrdoob/three.js), personnage « Vanguard » issu de Mixamo | Conditions d'utilisation Mixamo / Adobe (usage libre dans un projet, **pas CC0**) — à remplacer si le jeu devait être diffusé publiquement |
 
 | Armes (`media/models/weapons/`) : 7 modèles Sketchfab (via Objaverse), 1 modèle Poly Haven | Auteurs et liens dans [`public/media/credits-weapons.md`](public/media/credits-weapons.md) | CC BY 4.0 (7) et CC0 (1) |
-| Mobilier, véhicules, arbres, mobilier urbain (`media/models/props/`, 44 modèles) | Auteurs et liens dans [`public/media/credits-props.md`](public/media/credits-props.md) | CC BY 4.0 et CC0 |
+| Mobilier, équipements de laboratoire, véhicules, arbres, mobilier urbain (`media/models/props/`, 103 modèles) | Auteurs et liens dans [`public/media/credits-props.md`](public/media/credits-props.md) | CC BY 4.0 et CC0 |
 
 Les modèles sous **CC BY** imposent de citer leurs auteurs : les deux fichiers de crédits doivent accompagner toute
 diffusion du jeu. Aucun modèle « non commercial », « sans modification » ou sans licence explicite n'est utilisé.
