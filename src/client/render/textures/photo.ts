@@ -1,5 +1,5 @@
 /**
- * Photographic PBR textures (CC0, Poly Haven) for the most visible surfaces:
+ * Photographic PBR textures (CC0, Poly Haven and ambientCG) for the most visible surfaces:
  * albedo + normal + roughness at 1k, served from /media/tex. They replace the
  * procedural canvases when they could be loaded; otherwise the procedural texture is kept.
  */
@@ -16,6 +16,8 @@ interface PhotoDef {
 
 const PLASTER: PhotoDef = { set: 'painted_plaster_wall', size: 3, tint: 'match' };
 const FACADE: PhotoDef = { set: 'grey_plaster', size: 3.5, tint: 'match' };
+const TERRAZZO: PhotoDef = { set: 'Terrazzo013', size: 1.0, tint: 'match' };
+const CARPET: PhotoDef = { set: 'Carpet016', size: 1.2, tint: 'match' };
 const PHOTO: Partial<Record<MaterialId, PhotoDef>> = {
   asphalt: { set: 'asphalt_02', size: 3.2, tint: 0.85 },
   sidewalk: { set: 'concrete_pavement', size: 2.4 },
@@ -27,6 +29,18 @@ const PHOTO: Partial<Record<MaterialId, PhotoDef>> = {
   tile_beige: { set: 'floor_tiles_06', size: 2.4, tint: 1.35 },
   tile_white: { set: 'large_floor_tiles_02', size: 2.4, tint: 1.7 },
   gravel: { set: 'gravel_floor_02', size: 2.2 },
+  // ambientCG (CC0)
+  ceiling_tile: { set: 'OfficeCeiling001', size: 3 },
+  lino_grey: TERRAZZO,
+  lino_green: TERRAZZO,
+  lino_blue: TERRAZZO,
+  carpet_grey: CARPET,
+  carpet_blue: CARPET,
+  metal_brushed: { set: 'Metal009', size: 1.2 },
+  metal_grey: { set: 'Metal009', size: 1.2, tint: 'match' },
+  metal_dark: { set: 'Metal009', size: 1.2, tint: 'match' },
+  wood_dark: { set: 'Wood051', size: 1.5, tint: 1.3 },
+  metal_red: { set: 'PaintedMetal004', size: 1.5, tint: 0.8 },
   plaster_white: PLASTER,
   plaster_cream: PLASTER,
   plaster_blue: PLASTER,
@@ -38,7 +52,7 @@ const PHOTO: Partial<Record<MaterialId, PhotoDef>> = {
   facade_pink: FACADE,
 };
 /** Average colour of the neutral photos (to recolour them). */
-const AVERAGE: Record<string, number> = { painted_plaster_wall: 0xaba3a0, grey_plaster: 0x8b8674 };
+const AVERAGE: Record<string, number> = { painted_plaster_wall: 0xaba3a0, grey_plaster: 0x8b8674, Terrazzo013: 0xd1ccc7, Carpet016: 0xbcb093, Metal009: 0x929598 };
 
 interface Loaded {
   map: THREE.Texture;

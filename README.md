@@ -176,6 +176,7 @@ Assets tiers du dossier `public/media/` :
 | Élément | Source | Licence |
 |---|---|---|
 | Textures photographiques (`media/tex/`) et ciel (`media/hdr/sky.jpg`, converti depuis `belfast_sunset_puresky`) | [Poly Haven](https://polyhaven.com) | CC0 (domaine public) |
+| Textures photographiques d'intérieur (`media/tex/` : plafond, terrazzo, moquette, métal, bois) | [ambientCG](https://ambientcg.com) | CC0 (domaine public) |
 | Personnage animé (`media/models/soldier.json`, converti depuis `Soldier.glb`) | Exemples de [three.js](https://github.com/mrdoob/three.js), personnage « Vanguard » issu de Mixamo | Conditions d'utilisation Mixamo / Adobe (usage libre dans un projet, **pas CC0**) — à remplacer si le jeu devait être diffusé publiquement |
 
 Le reste — armes, mobilier, sons, textures secondaires — est généré par le code ; aucun élément n'est repris d'un jeu existant.
