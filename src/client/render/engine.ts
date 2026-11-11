@@ -319,13 +319,12 @@ class Engine implements IEngine {
       this.captureInterior(map, materials);
       // Real 3D models (furniture, vehicles…), instanced and tinted by the baked light.
       if (map.models?.length) {
-        const models = await buildMapModels(map, (pos, out) => this.sampleLight(pos, out), this.interiorEnv);
-        if (!wanted()) {
-          models.dispose();
-          return;
-        }
+        // Models stream in: on a slow connection the map is playable before the last one has arrived.
+        const models = buildMapModels(map, (pos, out) => this.sampleLight(pos, out), this.interiorEnv, this.quality !== 'high');
         this.models = models;
         this.scene.add(models.group);
+        await Promise.race([models.done, new Promise((r) => setTimeout(r, 8000))]);
+        if (!wanted()) return; // unloadMap() already disposed them
       }
       this.fitShadow(map);
       this.floorLevels = floorLevelsOf(map);

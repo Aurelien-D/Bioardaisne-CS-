@@ -60,11 +60,44 @@ function patchMaterial(material: THREE.Material, keepColor = false): void {
   material.customProgramCacheKey = () => 'bas-model';
 }
 
-function loadTemplate(asset: string): Promise<THREE.Object3D | null> {
-  let p = templates.get(asset);
+interface GltfJson {
+  materials?: {
+    normalTexture?: unknown;
+    occlusionTexture?: unknown;
+    pbrMetallicRoughness?: { metallicRoughnessTexture?: unknown; metallicFactor?: number; roughnessFactor?: number };
+  }[];
+}
+
+/**
+ * @param lite colour maps only (no normal / roughness / occlusion maps): a third of the downloads
+ *             and of the texture memory, for the lighter presets and phones.
+ */
+function loadTemplate(asset: string, lite: boolean): Promise<THREE.Object3D | null> {
+  const key = `${asset}|${lite ? 'lite' : 'full'}`;
+  let p = templates.get(key);
   if (!p) {
-    p = new GLTFLoader()
-      .loadAsync(new URL(`media/models/props/${asset}/model.json`, document.baseURI).href)
+    const url = new URL(`media/models/props/${asset}/model.json`, document.baseURI).href;
+    p = fetch(url)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<GltfJson>;
+      })
+      .then((json) => {
+        if (lite) {
+          for (const m of json.materials ?? []) {
+            delete m.normalTexture;
+            delete m.occlusionTexture;
+            const pbr = m.pbrMetallicRoughness;
+            if (pbr?.metallicRoughnessTexture) {
+              // Without its map, a metal/roughness pair of 1 / 1 would turn the whole object into chrome.
+              delete pbr.metallicRoughnessTexture;
+              pbr.metallicFactor = Math.min(pbr.metallicFactor ?? 1, 0.15);
+              pbr.roughnessFactor = Math.min(pbr.roughnessFactor ?? 1, 0.7);
+            }
+          }
+        }
+        return new GLTFLoader().parseAsync(JSON.stringify(json), url.slice(0, url.lastIndexOf('/') + 1));
+      })
       .then((g) => {
         g.scene.updateMatrixWorld(true);
         return g.scene as THREE.Object3D;
@@ -73,13 +106,15 @@ function loadTemplate(asset: string): Promise<THREE.Object3D | null> {
         console.warn(`[models] modèle « ${asset} » indisponible :`, err);
         return null;
       });
-    templates.set(asset, p);
+    templates.set(key, p);
   }
   return p;
 }
 
 export interface MapModels {
   group: THREE.Group;
+  /** Resolves when every model has arrived (or failed); models are added to `group` as they come. */
+  done: Promise<void>;
   dispose(): void;
 }
 
@@ -87,11 +122,13 @@ export interface MapModels {
  * @param interiorEnv reflection probe captured inside the building: models under a roof mirror
  *                    it instead of the sky (chrome chair legs must not shine like outdoors).
  */
-export async function buildMapModels(
+export function buildMapModels(
   map: MapData,
   sampleLight: (pos: Vec3, out: THREE.Color) => THREE.Color,
   interiorEnv: THREE.Texture | null = null,
-): Promise<MapModels> {
+  lite = false,
+): MapModels {
+  let disposed = false;
   const group = new THREE.Group();
   group.name = 'bas-models';
   const made: THREE.InstancedMesh[] = [];
@@ -118,11 +155,11 @@ export async function buildMapModels(
   const scl = new THREE.Vector3();
   const mat4 = new THREE.Matrix4();
   const color = new THREE.Color();
-  await Promise.all(
+  const done = Promise.all(
     [...byAsset].map(async ([key, list]) => {
       const [asset, where] = key.split('|') as [string, string];
-      const tpl = await loadTemplate(asset);
-      if (!tpl) return;
+      const tpl = await loadTemplate(asset, lite);
+      if (!tpl || disposed) return;
       tpl.traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;
@@ -162,10 +199,12 @@ export async function buildMapModels(
         made.push(im);
       });
     }),
-  );
+  ).then(() => undefined);
   return {
     group,
+    done,
     dispose() {
+      disposed = true;
       group.removeFromParent();
       for (const im of made) im.dispose();
       for (const m of cloned) m.dispose();

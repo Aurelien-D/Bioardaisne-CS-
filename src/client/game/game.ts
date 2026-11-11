@@ -20,7 +20,7 @@ import { createAudio } from '../audio';
 import type { HudFrame, IAudio, IAvatar, IEffects, IEngine, IHud, IViewModel } from '../core/contracts';
 import { radiansPerCount, SettingsStore, type KeyAction } from '../core/settings';
 import { LocalConnection, WsConnection } from '../net/connection';
-import { createAvatar, preloadAvatarAssets } from '../render/avatar';
+import { avatarOutdated, createAvatar, preloadAvatarAssets } from '../render/avatar';
 import { createEffects } from '../render/effects';
 import { createEngine } from '../render/engine';
 import { createViewModel } from '../render/viewmodel';
@@ -301,11 +301,21 @@ export class Game {
     await new Promise((r) => setTimeout(r, 30));
     const map = getMap(mapId);
     const world = new CollisionWorld(map.solids);
-    if (this.settings.value.quality !== 'low') await Promise.race([Promise.all([preloadAvatarAssets(), preloadWeaponAssets()]), new Promise((r) => setTimeout(r, 20000))]);
+    // Characters and weapons download while the map is being built. On a slow connection the game
+    // starts with simple stand-ins, replaced as soon as the real models arrive.
+    const detailed = this.settings.value.quality !== 'low';
+    // Phone demonstration: the weapons are a few pixels in the bots' hands, skip their 15 MB.
+    const phoneDemo = this.demo && !!window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    const assets = detailed ? Promise.all([preloadAvatarAssets(), phoneDemo ? null : preloadWeaponAssets()]) : null;
     await this.engine.loadMap(map, world, (f, label) => {
-      if (token === this.loadToken) this.menus.showLoading(label, 0.05 + f * 0.95);
+      if (token === this.loadToken) this.menus.showLoading(label, 0.05 + f * 0.9);
     });
     if (token !== this.loadToken) return;
+    if (assets) {
+      this.menus.showLoading('Arrivée des équipes…', 0.97);
+      await Promise.race([assets, new Promise((r) => setTimeout(r, 15000))]);
+      if (token !== this.loadToken) return;
+    }
     this.map = map;
     this.world = world;
     this.effects.clear();
@@ -947,6 +957,12 @@ export class Game {
         continue;
       }
       const info = this.roster.get(r.id);
+      if (r.avatar && avatarOutdated(r.avatar)) {
+        // The character model arrived after the match started: swap the stand-in for it.
+        this.engine.scene.remove(r.avatar.root);
+        r.avatar.dispose();
+        r.avatar = null;
+      }
       if (!r.avatar) {
         if (!info || info.team === 2) continue;
         r.avatar = createAvatar(info.team, info.name);

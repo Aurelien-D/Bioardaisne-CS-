@@ -11,6 +11,7 @@ import type { Vec3 } from '../../../shared/math/vec3';
 import type { WeaponId } from '../../../shared/weapons/defs';
 import type { AvatarFrame, IAvatar } from '../../core/contracts';
 import { WEAPONS } from '../../../shared/weapons/defs';
+import { getWeaponAsset } from '../weapons/assets';
 import { createWeaponModel, type WeaponModel } from '../weapons/models';
 import { setWorldQuaternion, solveTwoBone } from './ik';
 
@@ -146,7 +147,8 @@ export class SoldierAvatar implements IAvatar {
   }
 
   private setWeapon(id: WeaponId): void {
-    if (id === this.weaponId) return;
+    // Rebuilt when the weapon changes, or when its real model has arrived since (slow download).
+    if (id === this.weaponId && !(this.weapon && !this.weapon.detailed && getWeaponAsset(id))) return;
     if (this.weapon) {
       this.weaponHolder.remove(this.weapon.root);
       this.weapon.dispose();

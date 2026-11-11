@@ -411,6 +411,9 @@ class ViewModel implements IViewModel {
     if (this.pending !== undefined) {
       this.holsterT -= dt;
       if (this.holsterT <= 0) this.swap(this.pending);
+    } else if (this.id && this.model && !this.model.detailed && getWeaponAsset(this.id)) {
+      // The real model arrived after a slow download: it takes over from the stand-in.
+      this.swap(this.id);
     }
     const id = this.id;
     const model = this.model;

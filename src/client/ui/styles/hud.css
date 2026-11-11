@@ -907,6 +907,13 @@
   gap: 0.26rem;
 }
 
+/* Narrow screens (phone demonstration): the feed drops below the score instead of covering it. */
+@media (max-width: 700px) {
+  .bh-feed {
+    top: 5.6rem;
+  }
+}
+
 .bh-kill {
   display: flex;
   align-items: center;
