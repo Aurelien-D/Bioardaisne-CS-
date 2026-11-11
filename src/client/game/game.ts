@@ -134,7 +134,16 @@ export class Game {
   private held = new Set<KeyAction>();
   private locked = false;
   private fakeLock = false;
+  /** Pointer lock refused by the host page: aim with plain mouse movement instead. */
+  private softLock = false;
+  /** Published as a single page (no game server): solo only. */
+  private readonly standalone = (window as unknown as { __BAS_STANDALONE__?: boolean }).__BAS_STANDALONE__ === true;
+  /** Demonstration: spectate a bot match (phones, or #demo). */
+  private demo = false;
+  private followId = -1;
+  private followUntil = 0;
   private chatOpen = false;
+  private lockTries = 0;
   private showScores = false;
 
   private last = performance.now();
@@ -160,8 +169,14 @@ export class Game {
     });
     this.menus = createMenus(menusRoot, this.settings, {
       playSolo: (cfg) => this.connect(new LocalConnection(cfg, this.playerName())),
-      createRoom: (cfg) => this.connect(new WsConnection(this.wsUrl(), { name: this.playerName(), create: cfg })),
-      joinRoom: (code) => this.connect(new WsConnection(this.wsUrl(), { name: this.playerName(), room: code })),
+      createRoom: (cfg) => {
+        if (this.standalone) return this.menus.toast('Le multijoueur nécessite le serveur du jeu (voir le dépôt GitHub). Ici : solo contre les bots.', 'info');
+        this.connect(new WsConnection(this.wsUrl(), { name: this.playerName(), create: cfg }));
+      },
+      joinRoom: (code) => {
+        if (this.standalone) return this.menus.toast('Le multijoueur nécessite le serveur du jeu (voir le dépôt GitHub). Ici : solo contre les bots.', 'info');
+        this.connect(new WsConnection(this.wsUrl(), { name: this.playerName(), room: code }));
+      },
       resume: () => {
         this.menus.hide();
         this.lock();
@@ -195,6 +210,14 @@ export class Game {
     this.hud.update(this.hudFrame(false));
     if (new URLSearchParams(location.search).has('debug')) this.installDebug();
     requestAnimationFrame(this.frame);
+    // Phones cannot play (keyboard + mouse game): show a bot match instead.
+    if (location.hash === '#demo' || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)) this.startDemo();
+  }
+
+  private startDemo(): void {
+    this.demo = true;
+    if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) this.settings.update({ quality: 'medium', resolutionScale: 0.75 });
+    this.connect(new LocalConnection({ botFill: 10, botDifficulty: 2, freezeTime: 2, roundsToWin: 9, killLimit: 0, roundTime: 900 }, 'Spectateur'));
   }
 
   // ------------------------------------------------------------------ session
@@ -292,6 +315,10 @@ export class Game {
     this.audio.ambience(map.env.sunIntensity > 0.4 ? 'city' : 'interior');
     this.mode = 'playing';
     this.menus.hide();
+    if (this.demo) {
+      this.hud.toast('Démonstration : match de bots. Le jeu se joue sur ordinateur, au clavier et à la souris.');
+      return;
+    }
     this.lock();
     this.hud.toast('Cliquez dans le jeu pour capturer la souris — Échap pour le menu.');
   }
@@ -309,6 +336,7 @@ export class Game {
         this.setRoster(m.players);
         this.clockOffset = m.time - performance.now();
         this.clockInit = true;
+        if (this.demo) this.conn?.send({ t: 'team', team: 2 });
         void this.loadMap(m.config.mapId);
         break;
       case 'error':
@@ -599,7 +627,7 @@ export class Game {
   }
 
   private get capturing(): boolean {
-    return this.mode === 'playing' && (this.locked || this.fakeLock) && this.menus.current === null && !this.chatOpen;
+    return this.mode === 'playing' && (this.locked || this.fakeLock || this.softLock) && this.menus.current === null && !this.chatOpen;
   }
 
   private lock(): void {
@@ -609,6 +637,15 @@ export class Game {
       if (p && typeof p.catch === 'function') p.catch(() => undefined);
     } catch {
       /* needs a user gesture: the player clicks the canvas */
+    }
+    // Some host pages refuse pointer lock altogether: fall back to plain mouse movement.
+    if (this.standalone) {
+      window.setTimeout(() => {
+        if (this.mode === 'playing' && !this.locked && this.lockTries++ >= 1 && !this.softLock) {
+          this.softLock = true;
+          this.hud.toast('Capture de la souris indisponible ici : visez en déplaçant la souris, Échap pour le menu.');
+        }
+      }, 400);
     }
   }
 
@@ -683,16 +720,23 @@ export class Game {
       }
     });
     this.canvas.addEventListener('click', () => {
-      if (this.mode === 'playing' && this.menus.current === null && !this.locked) this.lock();
+      if (this.mode === 'playing' && this.menus.current === null && !this.locked && !this.demo) this.lock();
     });
     document.addEventListener('mousemove', (e) => {
-      if (!this.capturing || !this.locked) return;
+      if (!this.capturing || !(this.locked || this.softLock)) return;
       const s = this.settings.value;
       const zoom = this.me && (this.me.zoom > 0 || this.ads > 0.5) ? s.zoomSensitivity * (this.fov / s.fov) : 1;
       const k = radiansPerCount(s.sensitivity) * zoom;
       this.look(-e.movementX * k, -e.movementY * k * (s.invertY ? -1 : 1));
     });
     window.addEventListener('keydown', (e) => {
+      if (e.code === 'Escape' && this.softLock && this.mode === 'playing' && this.menus.current === null && !this.chatOpen) {
+        this.softLock = false;
+        this.lockTries = 0;
+        this.held.clear();
+        this.showPause();
+        return;
+      }
       if (!this.capturing) return;
       if (e.repeat) {
         e.preventDefault();
@@ -1013,6 +1057,8 @@ export class Game {
       cam.position.lerp(want, Math.min(1, dt * 4));
       cam.lookAt(d.x, d.y + 0.4, d.z);
       this.selfCorpse?.update({ dt, pos: d, yaw: 0, pitch: 0, crouch: 0, speed: 0, onGround: true, weapon: 'knife', reloading: false, carrying: false, protected: false, light: this.light });
+    } else if (this.followBot(dt)) {
+      // Spectating a player (third-person chase camera).
     } else if (this.map) {
       // Spectator overview.
       const b = this.map.bounds;
@@ -1026,6 +1072,31 @@ export class Game {
     if (!me) this.ads = 0;
     this.fov += (targetFov - this.fov) * Math.min(1, dt * 14);
     this.engine.setFov(this.fov);
+  }
+
+  /** Spectator chase camera behind a living player; returns false when nobody can be followed. */
+  private followBot(dt: number): boolean {
+    if (this.myTeam() !== 2 || !this.world) return false;
+    const now = performance.now();
+    let r = this.remotes.get(this.followId);
+    if (!r || !r.alive || !r.avatar || now > this.followUntil) {
+      const alive = [...this.remotes.values()].filter((x) => x.alive && x.avatar);
+      if (!alive.length) return false;
+      r = alive[Math.floor(Math.random() * alive.length)]!;
+      this.followId = r.id;
+      this.followUntil = now + 14000;
+    }
+    const back = forwardFromAngles(r.yaw + Math.PI, 0);
+    const head = { x: r.pos.x, y: r.pos.y + 1.55, z: r.pos.z };
+    const dir = { x: back.x * 0.94, y: 0.34, z: back.z * 0.94 };
+    const hit = this.world.raycast(head, dir, 3.2, MASK.Bullet);
+    const d = (hit ? Math.max(0.4, hit.dist - 0.3) : 2.9);
+    const cam = this.engine.camera;
+    this.tmpV.set(head.x + dir.x * d, head.y + dir.y * d, head.z + dir.z * d);
+    cam.position.lerp(this.tmpV, Math.min(1, dt * 7));
+    const f = forwardFromAngles(r.yaw, r.pitch * 0.5);
+    cam.lookAt(head.x + f.x * 6, head.y + f.y * 6 + 0.1, head.z + f.z * 6);
+    return true;
   }
 
   // ------------------------------------------------------------------ HUD
@@ -1070,9 +1141,9 @@ export class Game {
       score: m ? m.score : [0, 0],
       roundsToWin: m ? m.roundsToWin : 1,
       objectiveLine,
-      prompt: !this.locked && !this.fakeLock && this.menus.current === null && visible ? 'Cliquez pour reprendre le contrôle' : null,
+      prompt: !this.locked && !this.fakeLock && !this.softLock && !this.demo && this.menus.current === null && visible ? 'Cliquez pour reprendre le contrôle' : null,
       action: null,
-      spectating: !me && team === 2 ? 'Spectateur' : !me ? `${TEAMS[team].name}` : null,
+      spectating: !me && team === 2 ? (this.followId >= 0 ? this.name(this.followId) : 'Spectateur') : !me ? `${TEAMS[team].name}` : null,
       respawnIn: !me && team !== 2 && this.respawnAt > 0 ? Math.max(0, (this.respawnAt - now) / 1000) : -1,
       protected: !!me && me.protect > 0,
       carrying: false,
