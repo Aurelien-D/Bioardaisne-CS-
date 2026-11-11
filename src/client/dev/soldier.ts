@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { WeaponId } from '../../shared/weapons/defs';
 import { createAvatar, preloadAvatarAssets } from '../render/avatar';
+import { preloadWeaponAssets } from '../render/weapons/assets';
 
 const q = new URLSearchParams(location.search);
 const num = (k: string, d: number): number => (q.has(k) ? Number(q.get(k)) : d);
@@ -42,7 +43,7 @@ camera.lookAt(0, 1.0, 0);
 
 const light = new THREE.Color(1, 1, 1);
 void (async () => {
-  await preloadAvatarAssets();
+  await Promise.all([preloadAvatarAssets(), preloadWeaponAssets()]);
   const av = createAvatar((num('team', 0) as 0 | 1), 'Test');
   scene.add(av.root);
   if (q.has('debugmat')) {

@@ -24,6 +24,7 @@ import { createAvatar, preloadAvatarAssets } from '../render/avatar';
 import { createEffects } from '../render/effects';
 import { createEngine } from '../render/engine';
 import { createViewModel } from '../render/viewmodel';
+import { preloadWeaponAssets } from '../render/weapons/assets';
 import { createHud } from '../ui/hud';
 import { bindingLabel } from '../ui/keys';
 import { createMenus, type MenusApi } from '../ui/menus';
@@ -297,7 +298,7 @@ export class Game {
     await new Promise((r) => setTimeout(r, 30));
     const map = getMap(mapId);
     const world = new CollisionWorld(map.solids);
-    if (this.settings.value.quality !== 'low') await Promise.race([preloadAvatarAssets(), new Promise((r) => setTimeout(r, 15000))]);
+    if (this.settings.value.quality !== 'low') await Promise.race([Promise.all([preloadAvatarAssets(), preloadWeaponAssets()]), new Promise((r) => setTimeout(r, 20000))]);
     await this.engine.loadMap(map, world, (f, label) => {
       if (token === this.loadToken) this.menus.showLoading(label, 0.05 + f * 0.95);
     });

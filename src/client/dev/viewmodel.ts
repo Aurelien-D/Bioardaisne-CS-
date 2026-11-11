@@ -7,6 +7,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { WeaponId } from '../../shared/weapons/defs';
 import { preloadAvatarAssets } from '../render/avatar';
 import { createViewModel } from '../render/viewmodel';
+import { preloadWeaponAssets } from '../render/weapons/assets';
 
 const q = new URLSearchParams(location.search);
 const canvas = document.getElementById('c') as HTMLCanvasElement;
@@ -27,7 +28,7 @@ const camera = new THREE.PerspectiveCamera(54, innerWidth / innerHeight, 0.01, 1
 scene.add(camera);
 
 void (async () => {
-  await preloadAvatarAssets();
+  await Promise.all([preloadAvatarAssets(), preloadWeaponAssets()]);
   const vm = createViewModel();
   scene.add(vm.root);
   const id = (q.get('w') ?? 'rifle_m4') as WeaponId;

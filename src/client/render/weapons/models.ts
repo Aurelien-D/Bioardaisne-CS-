@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { WeaponId } from '../../../shared/weapons/defs';
+import { getWeaponAsset } from './assets';
 
 export interface WeaponModel {
   root: THREE.Group;
@@ -158,6 +159,27 @@ function gripAndTrigger(b: Builder, mat: Mat, h = 0.1, z = 0.03): void {
 }
 
 export function createWeaponModel(id: WeaponId, _lod: 'view' | 'world' = 'view'): WeaponModel {
+  // A real 3D model when one is loaded (see assets.ts); the procedural model otherwise.
+  const asset = getWeaponAsset(id);
+  if (asset) {
+    const root = new THREE.Group();
+    root.add(asset.scene.clone(true));
+    const anchor = (p: [number, number, number]): THREE.Object3D => {
+      const o = new THREE.Object3D();
+      o.position.set(p[0], p[1], p[2]);
+      root.add(o);
+      return o;
+    };
+    return {
+      root,
+      muzzle: anchor(asset.muzzle),
+      sight: anchor(asset.sight),
+      parts: {},
+      gripRight: anchor([0, -0.05, 0.03]),
+      gripLeft: anchor(asset.gripLeft),
+      dispose: () => undefined, // geometry and textures belong to the shared asset
+    };
+  }
   const b = new Builder();
   let muzzle: [number, number, number] = [0, 0.05, -0.2];
   let sight: [number, number, number] = [0, 0.08, 0];
