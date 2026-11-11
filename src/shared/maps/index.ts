@@ -33,5 +33,8 @@ export function getMap(id: string): MapData {
 }
 
 export function listMaps(includeDev = false): MapMeta[] {
-  return MAP_MODULES.map((m) => m.meta).filter((m) => includeDev || !m.id.startsWith('dev_'));
+  const all = MAP_MODULES.map((m) => m.meta);
+  const pub = all.filter((m) => !m.id.startsWith('dev_'));
+  // Development maps are hidden from the menu as soon as a real map exists.
+  return includeDev || pub.length === 0 ? all : pub;
 }
