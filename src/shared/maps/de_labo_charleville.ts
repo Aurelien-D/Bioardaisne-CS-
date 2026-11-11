@@ -19,7 +19,8 @@ export const meta: MapMeta = {
   id: 'de_labo_charleville',
   name: 'Laboratoire — Cours Briand',
   description: 'Plateau technique, accueil, boxes de prélèvement, bureaux à l’étage et terrasse : le labo de Charleville comme vous ne l’avez jamais validé.',
-  modes: ['tdm', 'defuse', 'secure'],
+  // Les zones « site » / « extract » et les points « sample » sont déjà posés pour les futurs modes à objectif.
+  modes: ['tdm'],
   players: [4, 12],
 };
 

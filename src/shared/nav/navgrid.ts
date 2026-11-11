@@ -179,6 +179,19 @@ export class NavGrid {
         nav.mainRegion = id;
       }
     }
+    // The main region is the one the players spawn in (roofs can be larger than the playable floor).
+    const votes = new Map<number, number>();
+    for (const sp of map.spawns) {
+      const n = nav.nodeAt(sp.pos, 1.5, false);
+      if (n >= 0) votes.set(nav.region[n]!, (votes.get(nav.region[n]!) ?? 0) + 1);
+    }
+    let bestVotes = 0;
+    for (const [id, v] of votes) {
+      if (v > bestVotes) {
+        bestVotes = v;
+        nav.mainRegion = id;
+      }
+    }
     for (let n = 0; n < count; n++) if (nav.region[n] === nav.mainRegion) nav.mainNodes.push(n);
 
     nav.g = new Float32Array(count);

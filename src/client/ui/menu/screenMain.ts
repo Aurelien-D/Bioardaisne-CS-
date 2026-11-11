@@ -9,6 +9,7 @@ import { Disposer, clear, h, isolateKeys, setText } from '../dom';
 import { createGameSetup, setupSummary, type GameSetup } from './gameSetup';
 import { icon, type IconName } from './icons';
 import { createControlsSheet, createCredits } from './infoViews';
+import { BRAND_LOGO } from '../../core/brand';
 import { createLogo } from './logo';
 import { createOptions, type OptionsTab, type OptionsView } from './options';
 import { createTipCard, panel, presentedBy } from './panel';
@@ -76,6 +77,7 @@ export function createMainScreen(ctx: MenuContext): MainScreen {
       },
     },
     createLogo('full', 'bas-logo'),
+    h('img', { src: BRAND_LOGO.horizontalDark, alt: 'Laboratoire Bio Ard’Aisne', class: 'bas-logo-official', draggable: 'false' }),
   );
   d.add(() => window.clearTimeout(logoTimer));
 

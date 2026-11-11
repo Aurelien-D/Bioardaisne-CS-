@@ -10,6 +10,7 @@
  * (rounded corners, floor paint) and unlit: the vertex colour carries the baked light of
  * the sign's position, or full white for self-illuminated signs (`lit`, and screens by default).
  */
+import { BRAND_COLORS, BRAND_MONOGRAM } from '../core/brand';
 import * as THREE from 'three';
 import { BRAND } from '../../shared/identity';
 import type { SignDef, SignStyle } from '../../shared/maps/types';
@@ -223,33 +224,22 @@ function drawDrop(ctx: Ctx, cx: number, cy: number, h: number, outline: string |
 
 /** Original BioArd'Aisne-style mark: a blood drop in a sighting ring. */
 function drawLogo(ctx: Ctx, cx: number, cy: number, s: number): void {
+  // Official "ba" monogram of the laboratory (vector outline from core/brand.ts).
+  const m = BRAND_MONOGRAM;
+  const k = (s * 0.95) / Math.max(m.width, m.height);
   ctx.save();
-  ctx.beginPath();
-  ctx.arc(cx, cy, s * 0.49, 0, Math.PI * 2);
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-  ctx.lineWidth = Math.max(1, s * 0.03);
-  ctx.strokeStyle = css(BRAND.navy);
-  ctx.stroke();
-  // Sighting ring
-  ctx.beginPath();
-  ctx.arc(cx, cy, s * 0.33, 0, Math.PI * 2);
-  ctx.lineWidth = s * 0.075;
-  ctx.strokeStyle = css(BRAND.blue);
-  ctx.stroke();
-  // Crosshair ticks
-  ctx.lineCap = 'round';
-  ctx.lineWidth = s * 0.06;
-  ctx.strokeStyle = css(BRAND.navy);
-  for (let k = 0; k < 4; k++) {
-    const a = (k * Math.PI) / 2;
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(a) * s * 0.25, cy + Math.sin(a) * s * 0.25);
-    ctx.lineTo(cx + Math.cos(a) * s * 0.43, cy + Math.sin(a) * s * 0.43);
-    ctx.stroke();
-  }
-  drawDrop(ctx, cx, cy - s * 0.01, s * 0.36, null);
+  ctx.translate(cx - (m.width * k) / 2, cy - (m.height * k) / 2);
+  ctx.scale(k, k);
+  ctx.translate(-m.minX, -m.minY);
+  ctx.fillStyle = BRAND_COLORS.red;
+  ctx.fill(monogramPath());
   ctx.restore();
+}
+
+let monogram: Path2D | null = null;
+function monogramPath(): Path2D {
+  if (!monogram) monogram = new Path2D(BRAND_MONOGRAM.path);
+  return monogram;
 }
 
 function drawCross(ctx: Ctx, cx: number, cy: number, s: number, fg: string): void {

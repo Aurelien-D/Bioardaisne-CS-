@@ -1,1 +1,169 @@
-# Bioardaisne-CS-
+# BioArd'Aisne Strike
+
+FPS 3D multijoueur jouable dans le navigateur, dans l'esprit de Counter-Strike: Source, aux couleurs du
+laboratoire Bio Ard'Aisne. Deux équipes — l'**Équipe Labo** et **Les Auditeurs** (audit surprise !) —
+s'affrontent dans des décors inspirés de nos laboratoires.
+
+Aucune installation côté joueur : un navigateur récent sur PC (Chrome, Edge ou Firefox) suffit.
+
+## État actuel
+
+| Élément | État |
+|---|---|
+| Déplacements « Source » (ZQSD, saut, accroupi, marche silencieuse), collisions | ✅ |
+| 8 armes originales (recul, dispersion, rechargement, lunette) | ✅ |
+| Bots (4 niveaux de difficulté), jeu solo sans serveur | ✅ |
+| Multijoueur : salons privés (code et lien d'invitation), serveur autoritaire, chat, tableau des scores | ✅ |
+| Mode **Match à mort par équipe** en manches | ✅ |
+| Carte `de_labo_charleville` (inspirée du site du cours Briand) | ✅ |
+| Menus, options (souris, vidéo, audio, viseur, touches), HUD complet, audio procédural | ✅ |
+| Cartes `de_rethel` et `de_charleville` | ⏳ à faire |
+| Modes **Audit surprise** (désamorçage) et **Sécurisation du laboratoire** | ⏳ à faire (désactivés dans les menus ; zones et points déjà posés sur la carte) |
+
+## Lancer le jeu en local
+
+Prérequis : [Node.js](https://nodejs.org) 20 ou plus récent.
+
+```bash
+npm install
+npm run dev
+```
+
+Ouvrez ensuite <http://localhost:5173>. Cette commande lance à la fois le client (Vite, port 5173) et le
+serveur de jeu (port 8080). Le mode **solo** fonctionne même sans serveur : la simulation tourne alors dans
+le navigateur.
+
+Pour tester le multijoueur sur une seule machine : ouvrez deux onglets, créez un salon dans le premier et
+rejoignez-le dans le second avec le code affiché dans le menu Échap.
+
+### Version de production
+
+```bash
+npm run build     # compile le client (dist/client) et le serveur (dist/server)
+npm start         # http://localhost:8080
+```
+
+Un seul processus Node sert le jeu **et** héberge les parties (WebSocket sur `/ws`).
+Variables d'environnement : `PORT` (8080 par défaut), `HOST` (0.0.0.0 par défaut).
+
+## Commandes
+
+Les touches sont **physiques** : sur un clavier AZERTY, on joue bien avec ZQSD. Tout est modifiable dans
+*Options → Touches*.
+
+| Action | Touche |
+|---|---|
+| Se déplacer | Z Q S D |
+| Sauter / s'accroupir / marche silencieuse | Espace / Ctrl gauche ou C / Maj gauche |
+| Tirer / lunette | Clic gauche / clic droit |
+| Recharger | R |
+| Armes | 1, 2, 3, molette, A (dernière arme) |
+| Tableau des scores | Tab |
+| Chat / chat d'équipe | Entrée ou Y / U |
+| Choix des armes / de l'équipe | B / M (ou `,` selon le clavier) |
+| Menu | Échap |
+
+Astuce : cliquez dans le jeu pour capturer la souris. `Ctrl+W` ferme l'onglet dans tous les navigateurs —
+préférez `C` pour vous accroupir en avançant, ou passez en plein écran (F11).
+
+## Inviter des collègues
+
+1. Menu **Créer un salon privé** → choisissez la carte, le nombre de bots, etc.
+2. Dans le jeu, **Échap** affiche le **code du salon** (5 caractères) et un bouton **Copier le lien d'invitation**.
+3. Vos collègues ouvrent le lien (ou saisissent le code dans **Rejoindre un salon**).
+
+Il faut pour cela que le serveur soit joignable par tout le monde : voir ci-dessous.
+
+## Déployer le jeu
+
+### Sur le réseau du laboratoire (le plus simple)
+
+Sur un PC ou un serveur du réseau interne :
+
+```bash
+npm install && npm run build && npm start
+```
+
+Les collègues ouvrent `http://<adresse-du-poste>:8080`. Le pare-feu du poste doit autoriser le port 8080.
+
+### Avec Docker (serveur interne ou VPS)
+
+```bash
+docker build -t bioardaisne-strike .
+docker run -d --name strike -p 8080:8080 --restart unless-stopped bioardaisne-strike
+```
+
+Pour une adresse publique en HTTPS, placez un reverse proxy devant (exemple avec [Caddy](https://caddyserver.com),
+qui gère le certificat et les WebSockets automatiquement) :
+
+```
+strike.exemple.fr {
+    reverse_proxy localhost:8080
+}
+```
+
+### Sur un hébergeur (Render, Fly.io, Railway…)
+
+Le dépôt contient un `Dockerfile` : il suffit de créer un service web à partir du dépôt.
+Sans Docker, les réglages sont : commande de build `npm install && npm run build`, commande de démarrage
+`npm start`, port `8080` (ou la variable `PORT` fournie par l'hébergeur). L'hébergeur doit accepter les
+WebSockets (c'est le cas des trois cités).
+
+Contrôle de bon fonctionnement : `GET /healthz` répond `ok`, `GET /api/status` donne le nombre de salons et de joueurs.
+
+### Dimensionnement
+
+Le serveur est léger : un match de 12 joueurs consomme moins de 1 % d'un cœur de processeur. Les salons vides
+sont supprimés au bout de deux minutes. Limites par défaut : 50 salons, 16 joueurs par salon.
+
+## Développement
+
+```bash
+npm run typecheck   # trois projets TypeScript (simulation partagée, client, serveur et outils)
+npm test            # tests unitaires et de simulation (Vitest)
+```
+
+Outils :
+
+| Commande | Rôle |
+|---|---|
+| `npx tsx tools/map-check.ts <carte\|all>` | Valide une carte (apparitions, étanchéité, navigation des bots…) |
+| `npx tsx tools/map-plan.ts <carte>` | Génère un plan vu de dessus (SVG et PNG) dans `tools/out/` |
+| `node tools/shot.cjs --map <carte> --pose "x,y,z,lacet,tangage"` | Captures 3D d'une carte |
+| `npx tsx tools/sim-bench.ts --map <carte> --bots 10 --minutes 4` | Match de bots sans affichage (équilibre, blocages, performances) |
+| `node tools/e2e/solo.cjs` et `node tools/e2e/multi.cjs` | Tests de bout en bout dans un navigateur sans affichage (après `npm run build`, nécessitent Playwright) |
+
+L'architecture est décrite dans [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). En résumé :
+
+- `src/shared` — simulation commune au client et au serveur (physique, mouvement, armes, salon, bots, cartes) ;
+- `src/server` — serveur Node (HTTP + WebSocket) ;
+- `src/client` — rendu Three.js, audio, menus, HUD et cœur du jeu (prédiction, interpolation).
+
+### Ajouter une carte
+
+1. Créez `src/shared/maps/<id>.ts` qui exporte `meta` et `build()` (voir `de_labo_charleville.ts`).
+   Les murs, portes, escaliers et le mobilier se posent avec `helpers.ts` et `props/`.
+2. Ajoutez le module à `MAP_MODULES` dans `src/shared/maps/index.ts`.
+3. Validez : `npx tsx tools/map-check.ts <id>` puis `npx tsx tools/sim-bench.ts --map <id>`.
+
+Collisions, rendu, éclairage et navigation des bots sont dérivés automatiquement de ce fichier.
+
+### Ajouter une arme
+
+1. Ajoutez son identifiant et sa fiche dans `src/shared/weapons/defs.ts`.
+2. Ajoutez son modèle dans `src/client/render/weapons/models.ts` et son timbre dans `src/client/audio/sounds/weapons.ts`.
+
+## Limites connues
+
+- Les modes à objectif et les deux cartes urbaines ne sont pas encore développés.
+- Éclairage précalculé : trois contrôles de qualité ne sont pas encore atteints (raccord de lumière entre deux
+  dalles de sol, soleil à travers une vitre, exposition de l'arène de test). Ils sont marqués comme défauts
+  connus dans `tests/lightbake.test.ts`.
+- Les modèles de joueurs et d'armes sont volontairement simples (formes géométriques).
+- Jeu pensé pour PC (clavier et souris) ; pas de version mobile.
+
+## Marque et contenus
+
+Les logos du dossier `public/brand/` sont ceux du Laboratoire Bio Ard'Aisne (repris du site public à la demande
+du laboratoire) et lui appartiennent. Tout le reste — modèles, textures, sons — est généré par le code ; aucun
+élément n'est repris d'un jeu existant.
